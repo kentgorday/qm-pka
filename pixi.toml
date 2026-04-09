@@ -8,8 +8,17 @@ version = "0.1.0"
 
 [dependencies]
 crest = ">=3.0.2,<4"
+# NOTE: gcp-correction pins mctc-lib <0.4, which forces xtb to build 2 (6.7.1).
+# That build has a Fortran format string bug crashing `xtb --opt`
+# (https://github.com/grimme-lab/xtb/issues/1332).
+# Workaround: we use `crest --mdopt` for optimization instead of `xtb --opt`.
+# If gcp-correction updates its mctc-lib constraint, xtb can be upgraded to build 4+.
 gcp-correction = ">=2.3.2,<3"
 psi4 = ">=1.10,<2"
 rdkit = ">=2024.03,<2026"
+xtb = ">=6.7.1,<7"  # used directly for single-point calculations
 pytest = ">=9.0.3,<10"
 mypy = ">=1.20.0,<2"
+
+[pypi-dependencies]
+qm-pka = { path = ".", editable = true }

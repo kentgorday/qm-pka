@@ -1,4 +1,10 @@
-"""Wrapper for xtb: geometry optimization and single-point energy."""
+"""Wrapper for xtb/crest: geometry optimization and single-point energy.
+
+Note: standalone xtb 6.7.1 from conda-forge has a Fortran format string bug
+that crashes --opt (github.com/grimme-lab/xtb/issues/1332). We work around
+this by using CREST's --optlev for optimization, which uses its own internal
+xTB implementation. Single-point calculations use standalone xtb (unaffected).
+"""
 
 from __future__ import annotations
 
@@ -19,9 +25,10 @@ def optimize(
     opt_level: str = "tight",
     work_dir: Path | None = None,
 ) -> Geometry:
-    """Run xtb geometry optimization.
+    """Run geometry optimization via CREST's --mdopt or --opt flag.
 
-    Returns the optimized Geometry.
+    Uses CREST instead of standalone xtb to work around the conda-forge
+    xtb 6.7.1 optimizer bug. Returns the optimized Geometry.
     """
     cleanup = False
     if work_dir is None:
@@ -33,11 +40,12 @@ def optimize(
         write_xyz(geom, input_xyz)
 
         cmd = [
-            "xtb",
+            "crest",
             str(input_xyz),
-            f"--gfn", str(gfn),
-            "--opt", opt_level,
+            "--gfn2" if gfn == 2 else f"--gfn{gfn}",
             "--chrg", str(charge),
+            "--optlev", opt_level,
+            "--mdopt", str(input_xyz),
         ]
         if solvent is not None:
             cmd.extend(["--alpb", solvent])
@@ -51,14 +59,14 @@ def optimize(
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"xtb optimization failed (exit {result.returncode}):\n"
+                f"crest optimization failed (exit {result.returncode}):\n"
                 f"{result.stderr[-2000:]}"
             )
 
-        opt_xyz = work_dir / "xtbopt.xyz"
+        opt_xyz = work_dir / "crest_best.xyz"
         if not opt_xyz.exists():
             raise FileNotFoundError(
-                f"xtb did not produce xtbopt.xyz in {work_dir}"
+                f"crest did not produce crest_best.xyz in {work_dir}"
             )
         return read_xyz(opt_xyz)
 
@@ -91,7 +99,7 @@ def single_point(
         cmd = [
             "xtb",
             str(input_xyz),
-            f"--gfn", str(gfn),
+            "--gfn", str(gfn),
             "--chrg", str(charge),
         ]
         if solvent is not None:
