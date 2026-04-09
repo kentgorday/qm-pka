@@ -1,0 +1,15 @@
+[workspace]
+channels = ["conda-forge"]
+name = "qm-pka"
+platforms = ["linux-64", "osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+crest = ">=3.0.2,<4"
+gcp-correction = ">=2.3.2,<3"
+psi4 = ">=1.10,<2"
+rdkit = ">=2024.03,<2026"
+pytest = ">=9.0.3,<10"
+mypy = ">=1.20.0,<2"
