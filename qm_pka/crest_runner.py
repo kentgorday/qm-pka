@@ -194,6 +194,7 @@ def _run_crest(cmd: list[str], work_dir: Path) -> subprocess.CompletedProcess[st
         raise RuntimeError(
             f"CREST failed (exit {result.returncode}):\n"
             f"cmd: {' '.join(cmd)}\n"
+            f"stdout (last 2000 chars): {result.stdout[-2000:]}\n"
             f"stderr: {result.stderr[-2000:]}"
         )
     return result
