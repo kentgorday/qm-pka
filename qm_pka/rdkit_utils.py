@@ -10,8 +10,13 @@ from rdkit.Chem.MolStandardize import rdMolStandardize
 from qm_pka.types import Geometry
 
 
-def smiles_to_3d(smiles: str) -> Geometry:
-    """Generate a 3D geometry from a SMILES string via ETKDG embedding."""
+def smiles_to_3d(smiles: str) -> tuple[Geometry, str]:
+    """Generate a 3D geometry from a SMILES string via ETKDG embedding.
+
+    Returns (geometry, explicit_h_smiles) where explicit_h_smiles has
+    explicit hydrogens and preserves the atom ordering of the geometry
+    (written with canonical=False).
+    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError(f"RDKit could not parse SMILES: {smiles}")
@@ -23,7 +28,10 @@ def smiles_to_3d(smiles: str) -> Geometry:
     conf = mol.GetConformer()
     symbols = tuple(atom.GetSymbol() for atom in mol.GetAtoms())
     coords = np.array(conf.GetPositions(), dtype=np.float64)
-    return Geometry(symbols=symbols, coords=coords)
+    explicit_h_smiles: str | None = Chem.MolToSmiles(mol, canonical=False)
+    if explicit_h_smiles is None:
+        raise RuntimeError(f"Failed to generate explicit-H SMILES for: {smiles}")
+    return Geometry(symbols=symbols, coords=coords), explicit_h_smiles
 
 
 def enumerate_tautomers(

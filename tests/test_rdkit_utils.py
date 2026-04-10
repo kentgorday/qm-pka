@@ -9,15 +9,28 @@ from qm_pka.rdkit_utils import (
 
 class TestSmilesTo3d:
     def test_water(self) -> None:
-        geom = smiles_to_3d("O")
+        geom, smi = smiles_to_3d("O")
         assert geom.symbols == ("O", "H", "H")
         assert geom.n_atoms == 3
         assert geom.coords.shape == (3, 3)
+        assert "H" in smi  # explicit H's
 
     def test_methane(self) -> None:
-        geom = smiles_to_3d("C")
+        geom, smi = smiles_to_3d("C")
         assert geom.n_atoms == 5
         assert geom.symbols[0] == "C"
+        assert smi.count("H") == 4
+
+    def test_explicit_h_smiles_atom_count_matches(self) -> None:
+        """Explicit-H SMILES should have same atom count as geometry."""
+        from rdkit import Chem
+
+        geom, smi = smiles_to_3d("CCO")
+        params = Chem.SmilesParserParams()
+        params.removeHs = False
+        mol = Chem.MolFromSmiles(smi, params)
+        assert mol is not None
+        assert mol.GetNumAtoms() == geom.n_atoms
 
 
 class TestEnumerateTautomers:

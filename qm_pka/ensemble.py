@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 
 import numpy as np
+from rdkit import Chem
+from rdkit.Chem import rdDetermineBonds
 
 from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
@@ -166,3 +168,75 @@ def load_ensemble(path: Path) -> Ensemble:
             )
         ensemble.charge_states[charge] = ChargeState(charge=charge, microstates=microstates)
     return ensemble
+
+
+def _mol_from_smiles_and_coords(smiles: str, geom: Geometry, charge: int) -> Chem.Mol:
+    """Build an RDKit mol from explicit-H SMILES, setting coordinates from geometry."""
+    params = Chem.SmilesParserParams()
+    params.removeHs = False
+    mol = Chem.MolFromSmiles(smiles, params)
+    if mol is None:
+        raise ValueError(f"RDKit could not parse SMILES: {smiles}")
+    if mol.GetNumAtoms() != geom.n_atoms:
+        raise ValueError(
+            f"SMILES atom count ({mol.GetNumAtoms()}) != geometry atom count ({geom.n_atoms})"
+        )
+    conf = Chem.Conformer(geom.n_atoms)
+    for i in range(geom.n_atoms):
+        conf.SetAtomPosition(
+            i,
+            (float(geom.coords[i, 0]), float(geom.coords[i, 1]), float(geom.coords[i, 2])),
+        )
+    mol.AddConformer(conf, assignId=True)
+    return mol
+
+
+def _mol_from_coords(geom: Geometry, charge: int) -> Chem.Mol:
+    """Build an RDKit mol from coordinates only, using rdDetermineBonds."""
+    mol = Chem.RWMol()
+    for sym in geom.symbols:
+        mol.AddAtom(Chem.Atom(sym))
+    conf = Chem.Conformer(geom.n_atoms)
+    for i in range(geom.n_atoms):
+        conf.SetAtomPosition(
+            i,
+            (float(geom.coords[i, 0]), float(geom.coords[i, 1]), float(geom.coords[i, 2])),
+        )
+    mol.AddConformer(conf, assignId=True)
+    rdDetermineBonds.DetermineBonds(mol, charge=charge)
+    return Chem.Mol(mol)
+
+
+def ensemble_to_sdf(ensemble: Ensemble, output_path: Path) -> Path:
+    """Write all conformers in an ensemble to an SDF file.
+
+    If a microstate has an explicit-H SMILES (approach 1), bond orders
+    come from the SMILES. Otherwise (approach 2), bonds are determined
+    from coordinates via rdDetermineBonds.
+
+    Each conformer is written as a separate record with properties:
+    charge, tautomer_id, smiles, energy_hartree, boltzmann_weight.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = Chem.SDWriter(str(output_path))
+
+    for charge, cs in sorted(ensemble.charge_states.items()):
+        for ms in cs.microstates:
+            for conf in ms.conformers:
+                if ms.smiles is not None:
+                    mol = _mol_from_smiles_and_coords(ms.smiles, conf.geometry, charge)
+                else:
+                    mol = _mol_from_coords(conf.geometry, charge)
+
+                mol.SetIntProp("charge", charge)
+                mol.SetProp("tautomer_id", ms.tautomer_id)
+                if ms.smiles is not None:
+                    mol.SetProp("smiles", ms.smiles)
+                mol.SetDoubleProp("energy_hartree", conf.energy)
+                if conf.weight is not None:
+                    mol.SetDoubleProp("boltzmann_weight", conf.weight)
+
+                writer.write(mol)
+
+    writer.close()
+    return output_path
