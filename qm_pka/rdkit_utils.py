@@ -13,9 +13,10 @@ from qm_pka.types import Geometry
 def smiles_to_3d(smiles: str) -> tuple[Geometry, str]:
     """Generate a 3D geometry from a SMILES string via ETKDG embedding.
 
-    Returns (geometry, explicit_h_smiles) where explicit_h_smiles has
-    explicit hydrogens and preserves the atom ordering of the geometry
-    (written with canonical=False).
+    Returns (geometry, explicit_h_smiles) where the geometry's atom
+    ordering matches the SMILES atom ordering. Coordinates are reordered
+    using _smilesAtomOutputOrder so that geometry index i corresponds
+    to SMILES atom i.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
@@ -26,11 +27,19 @@ def smiles_to_3d(smiles: str) -> tuple[Geometry, str]:
         raise RuntimeError(f"ETKDG embedding failed for: {smiles}")
     AllChem.MMFFOptimizeMolecule(mol)
     conf = mol.GetConformer()
-    symbols = tuple(atom.GetSymbol() for atom in mol.GetAtoms())
-    coords = np.array(conf.GetPositions(), dtype=np.float64)
-    explicit_h_smiles: str | None = Chem.MolToSmiles(mol, canonical=False)
+    all_coords = np.array(conf.GetPositions(), dtype=np.float64)
+
+    explicit_h_smiles: str | None = Chem.MolToSmiles(mol)
     if explicit_h_smiles is None:
         raise RuntimeError(f"Failed to generate explicit-H SMILES for: {smiles}")
+
+    # _smilesAtomOutputOrder[smi_idx] = mol_idx: reorder coords to match SMILES
+    import json
+
+    order: list[int] = json.loads(mol.GetProp("_smilesAtomOutputOrder"))
+    symbols = tuple(mol.GetAtomWithIdx(order[i]).GetSymbol() for i in range(len(order)))
+    coords = all_coords[order]
+
     return Geometry(symbols=symbols, coords=coords), explicit_h_smiles
 
 
