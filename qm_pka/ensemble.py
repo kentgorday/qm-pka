@@ -171,7 +171,11 @@ def load_ensemble(path: Path) -> Ensemble:
 
 
 def _mol_from_smiles_and_coords(smiles: str, geom: Geometry, charge: int) -> Chem.Mol:
-    """Build an RDKit mol from explicit-H SMILES, setting coordinates from geometry."""
+    """Build an RDKit mol from explicit-H SMILES, setting coordinates from geometry.
+
+    Assumes the geometry atom ordering matches the SMILES atom ordering
+    (i.e. geometry was reordered at creation time via _smilesAtomOutputOrder).
+    """
     params = Chem.SmilesParserParams()
     params.removeHs = False
     mol = Chem.MolFromSmiles(smiles, params)
@@ -181,6 +185,7 @@ def _mol_from_smiles_and_coords(smiles: str, geom: Geometry, charge: int) -> Che
         raise ValueError(
             f"SMILES atom count ({mol.GetNumAtoms()}) != geometry atom count ({geom.n_atoms})"
         )
+
     conf = Chem.Conformer(geom.n_atoms)
     for i in range(geom.n_atoms):
         conf.SetAtomPosition(
@@ -221,8 +226,9 @@ def ensemble_to_sdf(ensemble: Ensemble, output_path: Path) -> Path:
     writer = Chem.SDWriter(str(output_path))
 
     for charge, cs in sorted(ensemble.charge_states.items()):
-        for ms in cs.microstates:
-            for conf in ms.conformers:
+        sorted_ms = sorted(cs.microstates, key=lambda m: min(c.energy for c in m.conformers))
+        for ms in sorted_ms:
+            for conf in sorted(ms.conformers, key=lambda c: c.energy):
                 if ms.smiles is not None:
                     mol = _mol_from_smiles_and_coords(ms.smiles, conf.geometry, charge)
                 else:

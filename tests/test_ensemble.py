@@ -136,13 +136,14 @@ class TestSerialization:
         np.testing.assert_allclose(conf.geometry.coords, geom.coords, atol=1e-8)
 
 
-def _water_geom() -> Geometry:
+def _water_geom_smiles_order() -> Geometry:
+    """Water geometry in SMILES atom order: [H]O[H] -> H, O, H."""
     return Geometry(
-        symbols=("O", "H", "H"),
+        symbols=("H", "O", "H"),
         coords=np.array(
             [
-                [0.0, 0.0, 0.0],
                 [0.96, 0.0, 0.0],
+                [0.0, 0.0, 0.0],
                 [-0.24, 0.93, 0.0],
             ]
         ),
@@ -152,7 +153,7 @@ def _water_geom() -> Geometry:
 class TestEnsembleToSdf:
     def test_with_smiles(self, tmp_path: Path) -> None:
         """Approach 1: explicit-H SMILES provides bond orders."""
-        geom = _water_geom()
+        geom = _water_geom_smiles_order()
         ens = Ensemble(
             input_smiles="O",
             charge_states={
@@ -162,7 +163,7 @@ class TestEnsembleToSdf:
                         Microstate(
                             tautomer_id="O",
                             conformers=[Conformer(geometry=geom, energy=-76.4, weight=1.0)],
-                            smiles="O([H])[H]",
+                            smiles="[H]O[H]",
                         ),
                     ],
                 ),
@@ -183,7 +184,7 @@ class TestEnsembleToSdf:
 
     def test_without_smiles(self, tmp_path: Path) -> None:
         """Approach 2: no SMILES, bonds from rdDetermineBonds."""
-        geom = _water_geom()
+        geom = _water_geom_smiles_order()
         ens = Ensemble(
             input_smiles="O",
             charge_states={
@@ -209,7 +210,7 @@ class TestEnsembleToSdf:
         assert mol.GetNumBonds() == 2
 
     def test_multiple_charge_states(self, tmp_path: Path) -> None:
-        geom = _water_geom()
+        geom = _water_geom_smiles_order()
         ens = Ensemble(
             input_smiles="O",
             charge_states={
@@ -222,7 +223,7 @@ class TestEnsembleToSdf:
                                 Conformer(geometry=geom, energy=-76.4, weight=0.6),
                                 Conformer(geometry=geom, energy=-76.3, weight=0.4),
                             ],
-                            smiles="O([H])[H]",
+                            smiles="[H]O[H]",
                         ),
                     ],
                 ),
@@ -234,14 +235,14 @@ class TestEnsembleToSdf:
                             conformers=[
                                 Conformer(
                                     geometry=Geometry(
-                                        symbols=("O", "H"),
-                                        coords=np.array([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0]]),
+                                        symbols=("H", "O"),
+                                        coords=np.array([[0.96, 0.0, 0.0], [0.0, 0.0, 0.0]]),
                                     ),
                                     energy=-75.8,
                                     weight=1.0,
                                 ),
                             ],
-                            smiles="[O-][H]",
+                            smiles="[H][O-]",
                         ),
                     ],
                 ),
