@@ -94,7 +94,7 @@ def run_approach2(
 
     # Step 1: Generate initial 3D and optimize
     log.info("Generating 3D coordinates and optimizing...")
-    geom_3d = smiles_to_3d(smiles)
+    geom_3d, _ = smiles_to_3d(smiles)
     geom_opt = optimize(geom_3d, charge=ref_charge, solvent=solvent)
 
     # Step 2: Quick conformer pre-screen

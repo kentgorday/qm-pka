@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from rdkit import Chem
 
 from qm_pka.ensemble import (
     HARTREE_TO_KCAL,
@@ -9,6 +10,7 @@ from qm_pka.ensemble import (
     boltzmann_weights,
     charge_state_free_energy,
     ensemble_free_energy,
+    ensemble_to_sdf,
     load_ensemble,
     serialize_ensemble,
 )
@@ -132,3 +134,120 @@ class TestSerialization:
         conf = ens2.charge_states[0].microstates[0].conformers[0]
         assert conf.energy == pytest.approx(-76.43)
         np.testing.assert_allclose(conf.geometry.coords, geom.coords, atol=1e-8)
+
+
+def _water_geom() -> Geometry:
+    return Geometry(
+        symbols=("O", "H", "H"),
+        coords=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [0.96, 0.0, 0.0],
+                [-0.24, 0.93, 0.0],
+            ]
+        ),
+    )
+
+
+class TestEnsembleToSdf:
+    def test_with_smiles(self, tmp_path: Path) -> None:
+        """Approach 1: explicit-H SMILES provides bond orders."""
+        geom = _water_geom()
+        ens = Ensemble(
+            input_smiles="O",
+            charge_states={
+                0: ChargeState(
+                    charge=0,
+                    microstates=[
+                        Microstate(
+                            tautomer_id="O",
+                            conformers=[Conformer(geometry=geom, energy=-76.4, weight=1.0)],
+                            smiles="O([H])[H]",
+                        ),
+                    ],
+                ),
+            },
+        )
+        sdf_path = ensemble_to_sdf(ens, tmp_path / "test.sdf")
+        assert sdf_path.exists()
+        suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
+        mols = list(suppl)
+        assert len(mols) == 1
+        mol = mols[0]
+        assert mol is not None
+        assert mol.GetNumAtoms() == 3
+        assert mol.GetNumBonds() == 2
+        assert int(mol.GetProp("charge")) == 0
+        assert mol.GetProp("tautomer_id") == "O"
+        assert float(mol.GetDoubleProp("energy_hartree")) == pytest.approx(-76.4)
+
+    def test_without_smiles(self, tmp_path: Path) -> None:
+        """Approach 2: no SMILES, bonds from rdDetermineBonds."""
+        geom = _water_geom()
+        ens = Ensemble(
+            input_smiles="O",
+            charge_states={
+                0: ChargeState(
+                    charge=0,
+                    microstates=[
+                        Microstate(
+                            tautomer_id="fp_abc",
+                            conformers=[Conformer(geometry=geom, energy=-76.4, weight=1.0)],
+                            smiles=None,
+                        ),
+                    ],
+                ),
+            },
+        )
+        sdf_path = ensemble_to_sdf(ens, tmp_path / "test.sdf")
+        suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
+        mols = list(suppl)
+        assert len(mols) == 1
+        mol = mols[0]
+        assert mol is not None
+        assert mol.GetNumAtoms() == 3
+        assert mol.GetNumBonds() == 2
+
+    def test_multiple_charge_states(self, tmp_path: Path) -> None:
+        geom = _water_geom()
+        ens = Ensemble(
+            input_smiles="O",
+            charge_states={
+                0: ChargeState(
+                    charge=0,
+                    microstates=[
+                        Microstate(
+                            tautomer_id="O",
+                            conformers=[
+                                Conformer(geometry=geom, energy=-76.4, weight=0.6),
+                                Conformer(geometry=geom, energy=-76.3, weight=0.4),
+                            ],
+                            smiles="O([H])[H]",
+                        ),
+                    ],
+                ),
+                -1: ChargeState(
+                    charge=-1,
+                    microstates=[
+                        Microstate(
+                            tautomer_id="[OH-]",
+                            conformers=[
+                                Conformer(
+                                    geometry=Geometry(
+                                        symbols=("O", "H"),
+                                        coords=np.array([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0]]),
+                                    ),
+                                    energy=-75.8,
+                                    weight=1.0,
+                                ),
+                            ],
+                            smiles="[O-][H]",
+                        ),
+                    ],
+                ),
+            },
+        )
+        sdf_path = ensemble_to_sdf(ens, tmp_path / "test.sdf")
+        suppl = Chem.SDMolSupplier(str(sdf_path), removeHs=False)
+        mols = list(suppl)
+        assert len(mols) == 3  # 2 neutral conformers + 1 anion

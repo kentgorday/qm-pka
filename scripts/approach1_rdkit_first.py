@@ -93,7 +93,7 @@ def run_approach1(
         for smi in sorted(species_at_q):
             log.info(f"  Conformer search for {smi}...")
             try:
-                geom_3d = smiles_to_3d(smi)
+                geom_3d, explicit_h_smi = smiles_to_3d(smi)
                 geom_opt = optimize(geom_3d, charge=q, solvent=solvent)
                 conformers = conformer_search(
                     geom_opt,
@@ -108,7 +108,7 @@ def run_approach1(
                     Microstate(
                         tautomer_id=smi,
                         conformers=conformers,
-                        smiles=smi,
+                        smiles=explicit_h_smi,
                     )
                 )
             except Exception as e:
