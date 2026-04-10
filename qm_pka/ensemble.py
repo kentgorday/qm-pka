@@ -7,8 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from qm_pka.types import ChargeState, Conformer, Ensemble, Microstate
-from qm_pka.xyz_io import write_xyz
+from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
 # Constants
 HARTREE_TO_KCAL = 627.5094740631
@@ -87,13 +86,11 @@ def assign_weights(ensemble: Ensemble, temperature: float = 298.15) -> None:
 
 
 def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
-    """Write ensemble to JSON + individual XYZ files.
+    """Write ensemble to a single JSON file with inline coordinates.
 
     Returns the path to the JSON file.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    xyz_dir = output_dir / "xyz"
-    xyz_dir.mkdir(exist_ok=True)
 
     data: dict[str, object] = {
         "input_smiles": ensemble.input_smiles,
@@ -106,11 +103,10 @@ def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
         ms_list: list[dict[str, object]] = []
         for ms in cs.microstates:
             conf_list: list[dict[str, object]] = []
-            for i, conf in enumerate(ms.conformers):
-                xyz_name = f"q{charge}_t{ms.tautomer_id[:8]}_c{i}.xyz"
-                write_xyz(conf.geometry, xyz_dir / xyz_name)
+            for conf in ms.conformers:
                 conf_list.append({
-                    "xyz_file": f"xyz/{xyz_name}",
+                    "symbols": list(conf.geometry.symbols),
+                    "coords": conf.geometry.coords.tolist(),
                     "energy": conf.energy,
                     "weight": conf.weight,
                 })
@@ -129,12 +125,12 @@ def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
     data["charge_states"] = cs_data
 
     json_path = output_dir / "ensemble.json"
-    json_path.write_text(json.dumps(data, indent=2, default=str))
+    json_path.write_text(json.dumps(data, indent=2))
     return json_path
 
 
 def load_ensemble(path: Path) -> Ensemble:
-    """Load ensemble from JSON. Conformer geometries are not loaded (use XYZ paths)."""
+    """Load ensemble from JSON with inline coordinates."""
     raw = json.loads(path.read_text())
     ensemble = Ensemble(
         input_smiles=raw["input_smiles"],
@@ -146,11 +142,10 @@ def load_ensemble(path: Path) -> Ensemble:
         for ms_data in cs_data.get("microstates", []):
             conformers: list[Conformer] = []
             for conf_data in ms_data.get("conformers", []):
-                # Geometry is not loaded here — use xyz_file path to read if needed
-                from qm_pka.xyz_io import read_xyz
-
-                xyz_path = path.parent / conf_data["xyz_file"]
-                geom = read_xyz(xyz_path)
+                geom = Geometry(
+                    symbols=tuple(conf_data["symbols"]),
+                    coords=np.array(conf_data["coords"]),
+                )
                 conformers.append(
                     Conformer(
                         geometry=geom,
