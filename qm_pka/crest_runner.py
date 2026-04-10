@@ -1,4 +1,10 @@
-"""Wrapper for CREST: conformer search, tautomerization, protonation/deprotonation."""
+"""Wrapper for CREST: conformer search, tautomerization, protonation/deprotonation.
+
+All CREST commands use -newversion to ensure CREST uses its internal tblite
+backend rather than the standalone xtb binary. This avoids a Fortran format
+string bug in xtb 6.7.1 build 2 (github.com/grimme-lab/xtb/issues/1332)
+which is forced by gcp-correction's mctc-lib <0.4 pin.
+"""
 
 from __future__ import annotations
 
@@ -172,6 +178,7 @@ def _build_crest_cmd(
         "--gfn2",
         "--chrg",
         str(charge),
+        "-newversion",  # use tblite backend, not standalone xtb
     ]
     if solvent is not None:
         cmd.extend(["--alpb", solvent])

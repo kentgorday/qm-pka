@@ -70,10 +70,10 @@ def _parse_single_xyz(lines: list[str]) -> Geometry:
 def _parse_comment_energy(comment: str) -> float:
     """Extract energy in Hartree from a CREST-style comment line.
 
-    CREST writes the energy as a plain float in the comment line,
-    e.g. '     -15.12345678'.
+    CREST writes the energy as the first token in the comment line,
+    e.g. '     -15.12345678' or '-15.12345678   1.0000000000'.
     """
-    return float(comment.strip())
+    return float(comment.split()[0])
 
 
 def _format_xyz(geom: Geometry, comment: str = "") -> str:
