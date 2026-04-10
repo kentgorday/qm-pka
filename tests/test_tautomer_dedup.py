@@ -14,11 +14,13 @@ def _make_water() -> Geometry:
     """O-H-H with H's close to O."""
     return Geometry(
         symbols=("O", "H", "H"),
-        coords=np.array([
-            [0.0, 0.0, 0.0],
-            [0.96, 0.0, 0.0],
-            [-0.24, 0.93, 0.0],
-        ]),
+        coords=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [0.96, 0.0, 0.0],
+                [-0.24, 0.93, 0.0],
+            ]
+        ),
     )
 
 
@@ -26,14 +28,16 @@ def _make_methanol() -> Geometry:
     """CH3-OH: C has 3 H's, O has 1 H."""
     return Geometry(
         symbols=("C", "O", "H", "H", "H", "H"),
-        coords=np.array([
-            [0.0, 0.0, 0.0],       # C
-            [1.43, 0.0, 0.0],      # O
-            [-0.5, 0.9, 0.0],      # H on C
-            [-0.5, -0.45, 0.78],   # H on C
-            [-0.5, -0.45, -0.78],  # H on C
-            [1.80, 0.85, 0.0],     # H on O
-        ]),
+        coords=np.array(
+            [
+                [0.0, 0.0, 0.0],  # C
+                [1.43, 0.0, 0.0],  # O
+                [-0.5, 0.9, 0.0],  # H on C
+                [-0.5, -0.45, 0.78],  # H on C
+                [-0.5, -0.45, -0.78],  # H on C
+                [1.80, 0.85, 0.0],  # H on O
+            ]
+        ),
     )
 
 
@@ -41,13 +45,15 @@ def _make_methoxide() -> Geometry:
     """CH3-O⁻: C has 3 H's, O has 0 H's."""
     return Geometry(
         symbols=("C", "O", "H", "H", "H"),
-        coords=np.array([
-            [0.0, 0.0, 0.0],       # C
-            [1.43, 0.0, 0.0],      # O
-            [-0.5, 0.9, 0.0],      # H on C
-            [-0.5, -0.45, 0.78],   # H on C
-            [-0.5, -0.45, -0.78],  # H on C
-        ]),
+        coords=np.array(
+            [
+                [0.0, 0.0, 0.0],  # C
+                [1.43, 0.0, 0.0],  # O
+                [-0.5, 0.9, 0.0],  # H on C
+                [-0.5, -0.45, 0.78],  # H on C
+                [-0.5, -0.45, -0.78],  # H on C
+            ]
+        ),
     )
 
 
@@ -87,7 +93,9 @@ class TestFingerprint:
         assert h_assignment_fingerprint(g1) == h_assignment_fingerprint(g2)
 
     def test_different_tautomer_different_fp(self) -> None:
-        assert h_assignment_fingerprint(_make_methanol()) != h_assignment_fingerprint(_make_methoxide())
+        fp_methanol = h_assignment_fingerprint(_make_methanol())
+        fp_methoxide = h_assignment_fingerprint(_make_methoxide())
+        assert fp_methanol != fp_methoxide
 
 
 class TestDeduplicateTautomers:

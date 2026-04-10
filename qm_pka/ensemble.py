@@ -104,18 +104,22 @@ def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
         for ms in cs.microstates:
             conf_list: list[dict[str, object]] = []
             for conf in ms.conformers:
-                conf_list.append({
-                    "symbols": list(conf.geometry.symbols),
-                    "coords": conf.geometry.coords.tolist(),
-                    "energy": conf.energy,
-                    "weight": conf.weight,
-                })
-            ms_list.append({
-                "tautomer_id": ms.tautomer_id,
-                "smiles": ms.smiles,
-                "n_conformers": len(ms.conformers),
-                "conformers": conf_list,
-            })
+                conf_list.append(
+                    {
+                        "symbols": list(conf.geometry.symbols),
+                        "coords": conf.geometry.coords.tolist(),
+                        "energy": conf.energy,
+                        "weight": conf.weight,
+                    }
+                )
+            ms_list.append(
+                {
+                    "tautomer_id": ms.tautomer_id,
+                    "smiles": ms.smiles,
+                    "n_conformers": len(ms.conformers),
+                    "conformers": conf_list,
+                }
+            )
         cs_data[str(charge)] = {
             "charge": charge,
             "n_microstates": len(cs.microstates),
@@ -160,7 +164,5 @@ def load_ensemble(path: Path) -> Ensemble:
                     smiles=ms_data.get("smiles"),
                 )
             )
-        ensemble.charge_states[charge] = ChargeState(
-            charge=charge, microstates=microstates
-        )
+        ensemble.charge_states[charge] = ChargeState(charge=charge, microstates=microstates)
     return ensemble

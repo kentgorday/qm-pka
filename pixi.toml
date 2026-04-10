@@ -5,6 +5,11 @@ platforms = ["linux-64", "osx-arm64"]
 version = "0.1.0"
 
 [tasks]
+lint = "ruff check qm_pka/ tests/ scripts/"
+format = "ruff format qm_pka/ tests/ scripts/"
+format-check = "ruff format --check qm_pka/ tests/ scripts/"
+typecheck = "mypy qm_pka/ tests/ scripts/"
+check = { depends-on = ["lint", "format-check", "typecheck"] }
 
 [dependencies]
 crest = ">=3.0.2,<4"
@@ -22,3 +27,4 @@ mypy = ">=1.20.0,<2"
 
 [pypi-dependencies]
 qm-pka = { path = ".", editable = true }
+ruff = ">=0.11,<1"

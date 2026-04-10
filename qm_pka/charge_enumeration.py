@@ -152,10 +152,7 @@ def enumerate_charge_state(smiles: str, target_charge: int) -> list[str]:
     if current_charge == target_charge:
         return [canonical_smiles(smiles)]
 
-    if target_charge < current_charge:
-        step_fn = deprotonate_all_sites
-    else:
-        step_fn = protonate_all_sites
+    step_fn = deprotonate_all_sites if target_charge < current_charge else protonate_all_sites
 
     n_steps = abs(target_charge - current_charge)
     current_level: set[str] = {canonical_smiles(smiles)}

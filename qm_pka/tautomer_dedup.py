@@ -67,8 +67,7 @@ def assign_hydrogens(geom: Geometry) -> tuple[int, ...]:
 
         if best_heavy_pos is None:
             raise ValueError(
-                f"Hydrogen at index {h_idx} has no heavy atom within "
-                f"covalent bond distance"
+                f"Hydrogen at index {h_idx} has no heavy atom within covalent bond distance"
             )
         h_counts[best_heavy_pos] += 1
 
@@ -100,9 +99,7 @@ def deduplicate_tautomers(
     return dict(groups)
 
 
-def validate_heavy_atom_ordering(
-    reference: Geometry, candidate: Geometry
-) -> bool:
+def validate_heavy_atom_ordering(reference: Geometry, candidate: Geometry) -> bool:
     """Check that heavy atoms appear in the same element order.
 
     CREST should preserve heavy-atom ordering across tautomerization

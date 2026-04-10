@@ -1,16 +1,16 @@
-import numpy as np
-import pytest
 from pathlib import Path
 
+import numpy as np
+import pytest
+
 from qm_pka.ensemble import (
+    HARTREE_TO_KCAL,
     assign_weights,
     boltzmann_weights,
     charge_state_free_energy,
     ensemble_free_energy,
-    serialize_ensemble,
     load_ensemble,
-    HARTREE_TO_KCAL,
-    KB_HARTREE,
+    serialize_ensemble,
 )
 from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
@@ -98,9 +98,16 @@ class TestAssignWeights:
 
 class TestSerialization:
     def test_round_trip(self, tmp_path: Path) -> None:
-        geom = Geometry(symbols=("O", "H", "H"), coords=np.array([
-            [0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0],
-        ]))
+        geom = Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [0.96, 0.0, 0.0],
+                    [-0.24, 0.93, 0.0],
+                ]
+            ),
+        )
         ens = Ensemble(
             input_smiles="O",
             charge_states={
