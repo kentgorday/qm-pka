@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 from qm_pka.types import Geometry
-from qm_pka.xyz_io import read_xyz, write_xyz
+from qm_pka.xyz_io import read_multi_xyz, read_xyz, write_xyz
 
 
 def optimize(
@@ -63,12 +63,16 @@ def optimize(
                 f"{result.stderr[-2000:]}"
             )
 
-        opt_xyz = work_dir / "crest_best.xyz"
+        opt_xyz = work_dir / "crest_ensemble.xyz"
         if not opt_xyz.exists():
             raise FileNotFoundError(
-                f"crest did not produce crest_best.xyz in {work_dir}"
+                f"crest did not produce crest_ensemble.xyz in {work_dir}"
             )
-        return read_xyz(opt_xyz)
+        # crest_ensemble.xyz is a multi-xyz; first structure is the optimized one
+        conformers = read_multi_xyz(opt_xyz)
+        if not conformers:
+            raise RuntimeError("crest_ensemble.xyz is empty")
+        return conformers[0].geometry
 
     finally:
         if cleanup:
