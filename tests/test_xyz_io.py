@@ -1,10 +1,10 @@
-import numpy as np
-import pytest
 from pathlib import Path
 
-from qm_pka.xyz_io import read_xyz, read_multi_xyz, write_xyz, write_multi_xyz
-from qm_pka.types import Geometry, Conformer
+import numpy as np
+import pytest
 
+from qm_pka.types import Conformer, Geometry
+from qm_pka.xyz_io import read_multi_xyz, read_xyz, write_multi_xyz, write_xyz
 
 WATER_XYZ = """\
 3
@@ -54,13 +54,15 @@ class TestWriteXyz:
     def test_round_trip(self, tmp_path: Path) -> None:
         geom = Geometry(
             symbols=("C", "H", "H", "H", "H"),
-            coords=np.array([
-                [0.0, 0.0, 0.0],
-                [1.089, 0.0, 0.0],
-                [-0.363, 1.027, 0.0],
-                [-0.363, -0.513, 0.890],
-                [-0.363, -0.513, -0.890],
-            ]),
+            coords=np.array(
+                [
+                    [0.0, 0.0, 0.0],
+                    [1.089, 0.0, 0.0],
+                    [-0.363, 1.027, 0.0],
+                    [-0.363, -0.513, 0.890],
+                    [-0.363, -0.513, -0.890],
+                ]
+            ),
         )
         p = tmp_path / "methane.xyz"
         write_xyz(geom, p, comment="methane")

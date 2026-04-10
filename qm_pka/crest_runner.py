@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from qm_pka.types import Conformer, Geometry
-from qm_pka.xyz_io import read_multi_xyz, read_xyz, write_xyz
+from qm_pka.xyz_io import read_multi_xyz, write_xyz
 
 
 def conformer_search(
@@ -33,9 +33,7 @@ def conformer_search(
     Returns:
         List of Conformer objects from the ensemble, sorted by energy.
     """
-    cmd, work_dir, cleanup = _build_crest_cmd(
-        geom, charge, solvent, threads, work_dir
-    )
+    cmd, work_dir, cleanup = _build_crest_cmd(geom, charge, solvent, threads, work_dir)
     cmd.extend(["--ewin", str(ewin)])
 
     if mode == "quick":
@@ -51,13 +49,12 @@ def conformer_search(
         _run_crest(cmd, work_dir)
         output_file = work_dir / "crest_conformers.xyz"
         if not output_file.exists():
-            raise FileNotFoundError(
-                f"CREST did not produce crest_conformers.xyz in {work_dir}"
-            )
+            raise FileNotFoundError(f"CREST did not produce crest_conformers.xyz in {work_dir}")
         return read_multi_xyz(output_file)
     finally:
         if cleanup:
             import shutil
+
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
@@ -72,9 +69,7 @@ def tautomerize(
 
     Returns list of unique tautomer geometries (as Geometry objects).
     """
-    cmd, work_dir, cleanup = _build_crest_cmd(
-        geom, charge, solvent, threads, work_dir
-    )
+    cmd, work_dir, cleanup = _build_crest_cmd(geom, charge, solvent, threads, work_dir)
     cmd.append("--tautomerize")
 
     try:
@@ -88,6 +83,7 @@ def tautomerize(
     finally:
         if cleanup:
             import shutil
+
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
@@ -103,9 +99,7 @@ def deprotonate(
     Generates structures with one proton removed (charge - 1).
     Returns list of deprotonated geometries.
     """
-    cmd, work_dir, cleanup = _build_crest_cmd(
-        geom, charge, solvent, threads, work_dir
-    )
+    cmd, work_dir, cleanup = _build_crest_cmd(geom, charge, solvent, threads, work_dir)
     cmd.append("--deprotonate")
 
     try:
@@ -118,6 +112,7 @@ def deprotonate(
     finally:
         if cleanup:
             import shutil
+
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
@@ -133,9 +128,7 @@ def protonate(
     Generates structures with one proton added (charge + 1).
     Returns list of protonated geometries.
     """
-    cmd, work_dir, cleanup = _build_crest_cmd(
-        geom, charge, solvent, threads, work_dir
-    )
+    cmd, work_dir, cleanup = _build_crest_cmd(geom, charge, solvent, threads, work_dir)
     cmd.append("--protonate")
 
     try:
@@ -148,6 +141,7 @@ def protonate(
     finally:
         if cleanup:
             import shutil
+
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
@@ -176,7 +170,8 @@ def _build_crest_cmd(
         "crest",
         str(input_xyz),
         "--gfn2",
-        "--chrg", str(charge),
+        "--chrg",
+        str(charge),
     ]
     if solvent is not None:
         cmd.extend(["--alpb", solvent])

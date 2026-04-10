@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 from qm_pka.types import Geometry
-from qm_pka.xyz_io import read_multi_xyz, read_xyz, write_xyz
+from qm_pka.xyz_io import read_multi_xyz, write_xyz
 
 
 def optimize(
@@ -43,9 +43,12 @@ def optimize(
             "crest",
             str(input_xyz),
             "--gfn2" if gfn == 2 else f"--gfn{gfn}",
-            "--chrg", str(charge),
-            "--optlev", opt_level,
-            "--mdopt", str(input_xyz),
+            "--chrg",
+            str(charge),
+            "--optlev",
+            opt_level,
+            "--mdopt",
+            str(input_xyz),
         ]
         if solvent is not None:
             cmd.extend(["--alpb", solvent])
@@ -59,15 +62,12 @@ def optimize(
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"crest optimization failed (exit {result.returncode}):\n"
-                f"{result.stderr[-2000:]}"
+                f"crest optimization failed (exit {result.returncode}):\n{result.stderr[-2000:]}"
             )
 
         opt_xyz = work_dir / "crest_ensemble.xyz"
         if not opt_xyz.exists():
-            raise FileNotFoundError(
-                f"crest did not produce crest_ensemble.xyz in {work_dir}"
-            )
+            raise FileNotFoundError(f"crest did not produce crest_ensemble.xyz in {work_dir}")
         # crest_ensemble.xyz is a multi-xyz; first structure is the optimized one
         conformers = read_multi_xyz(opt_xyz)
         if not conformers:
@@ -77,6 +77,7 @@ def optimize(
     finally:
         if cleanup:
             import shutil
+
             shutil.rmtree(work_dir, ignore_errors=True)
 
 
@@ -103,8 +104,10 @@ def single_point(
         cmd = [
             "xtb",
             str(input_xyz),
-            "--gfn", str(gfn),
-            "--chrg", str(charge),
+            "--gfn",
+            str(gfn),
+            "--chrg",
+            str(charge),
         ]
         if solvent is not None:
             cmd.extend(["--alpb", solvent])
@@ -118,8 +121,7 @@ def single_point(
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"xtb single-point failed (exit {result.returncode}):\n"
-                f"{result.stderr[-2000:]}"
+                f"xtb single-point failed (exit {result.returncode}):\n{result.stderr[-2000:]}"
             )
 
         return _parse_energy(result.stdout)
@@ -127,6 +129,7 @@ def single_point(
     finally:
         if cleanup:
             import shutil
+
             shutil.rmtree(work_dir, ignore_errors=True)
 
 

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
 from qm_pka.crest_runner import (
@@ -19,12 +18,10 @@ from qm_pka.crest_runner import (
     protonate,
     tautomerize,
 )
-from qm_pka.ensemble import assign_weights, serialize_ensemble, HARTREE_TO_KCAL
+from qm_pka.ensemble import HARTREE_TO_KCAL, assign_weights, serialize_ensemble
 from qm_pka.rdkit_utils import smiles_to_3d
 from qm_pka.tautomer_dedup import (
     deduplicate_tautomers,
-    h_assignment_fingerprint,
-    validate_heavy_atom_ordering,
 )
 from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 from qm_pka.xtb_runner import optimize
@@ -33,9 +30,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
 
-def _filter_by_energy_window(
-    conformers: list[Conformer], ewin_kcal: float
-) -> list[Conformer]:
+def _filter_by_energy_window(conformers: list[Conformer], ewin_kcal: float) -> list[Conformer]:
     """Keep conformers within ewin kcal/mol of the lowest energy."""
     if not conformers:
         return []
@@ -55,10 +50,14 @@ def _step_charge(
     results: list[Geometry] = []
     if target_charge < current_charge:
         for geom in geometries:
-            results.extend(deprotonate(geom, charge=current_charge, solvent=solvent, threads=threads))
+            results.extend(
+                deprotonate(geom, charge=current_charge, solvent=solvent, threads=threads)
+            )
     elif target_charge > current_charge:
         for geom in geometries:
-            results.extend(protonate(geom, charge=current_charge, solvent=solvent, threads=threads))
+            results.extend(
+                protonate(geom, charge=current_charge, solvent=solvent, threads=threads)
+            )
     return results
 
 
@@ -109,7 +108,9 @@ def run_approach2(
         threads=threads,
     )
     representatives = _filter_by_energy_window(prescreen_conformers, prescreen_ewin)
-    log.info(f"  {len(representatives)} representative conformer(s) within {prescreen_ewin} kcal/mol")
+    log.info(
+        f"  {len(representatives)} representative conformer(s) within {prescreen_ewin} kcal/mol"
+    )
     rep_geoms = [c.geometry for c in representatives]
 
     # Step 3: Build charge states iteratively outward from reference
@@ -136,9 +137,7 @@ def run_approach2(
             if adjacent not in computed_geoms:
                 log.warning(f"  No source geometries at charge {adjacent}, skipping q={q}")
                 continue
-            source_geoms = _step_charge(
-                computed_geoms[adjacent], adjacent, q, solvent, threads
-            )
+            source_geoms = _step_charge(computed_geoms[adjacent], adjacent, q, solvent, threads)
             log.info(f"  {len(source_geoms)} structure(s) from (de)protonation")
 
         if not source_geoms:
@@ -203,10 +202,15 @@ def main() -> None:
     parser.add_argument("--charge-min", type=int, default=-1, help="Minimum charge state")
     parser.add_argument("--charge-max", type=int, default=0, help="Maximum charge state")
     parser.add_argument("--solvent", default="water", help="Solvent for ALPB")
-    parser.add_argument("--prescreen-mode", default="quick", choices=["default", "quick", "squick", "mquick"])
-    parser.add_argument("--full-mode", default="default", choices=["default", "quick", "squick", "mquick"])
-    parser.add_argument("--prescreen-ewin", type=float, default=6.0, help="Energy window for pre-screen (kcal/mol)")
-    parser.add_argument("--ewin", type=float, default=6.0, help="Energy window for full search (kcal/mol)")
+    mode_choices = ["default", "quick", "squick", "mquick"]
+    parser.add_argument("--prescreen-mode", default="quick", choices=mode_choices)
+    parser.add_argument("--full-mode", default="default", choices=mode_choices)
+    parser.add_argument(
+        "--prescreen-ewin", type=float, default=6.0, help="Pre-screen energy window (kcal/mol)"
+    )
+    parser.add_argument(
+        "--ewin", type=float, default=6.0, help="Full search energy window (kcal/mol)"
+    )
     parser.add_argument("--threads", type=int, default=None, help="CPU threads for CREST")
 
     args = parser.parse_args()

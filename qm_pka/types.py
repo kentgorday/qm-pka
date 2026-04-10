@@ -16,8 +16,7 @@ class Geometry:
     def __post_init__(self) -> None:
         if len(self.symbols) != self.coords.shape[0]:
             raise ValueError(
-                f"symbols length ({len(self.symbols)}) != "
-                f"coords rows ({self.coords.shape[0]})"
+                f"symbols length ({len(self.symbols)}) != coords rows ({self.coords.shape[0]})"
             )
         if self.coords.ndim != 2 or self.coords.shape[1] != 3:
             raise ValueError(f"coords must have shape (n, 3), got {self.coords.shape}")

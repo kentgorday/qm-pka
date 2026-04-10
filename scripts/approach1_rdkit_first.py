@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
 from qm_pka.charge_enumeration import enumerate_charge_state
@@ -134,7 +133,8 @@ def main() -> None:
     parser.add_argument("--charge-min", type=int, default=-1, help="Minimum charge state")
     parser.add_argument("--charge-max", type=int, default=0, help="Maximum charge state")
     parser.add_argument("--solvent", default="water", help="Solvent for ALPB")
-    parser.add_argument("--crest-mode", default="default", choices=["default", "quick", "squick", "mquick"])
+    crest_choices = ["default", "quick", "squick", "mquick"]
+    parser.add_argument("--crest-mode", default="default", choices=crest_choices)
     parser.add_argument("--ewin", type=float, default=6.0, help="Energy window (kcal/mol)")
     parser.add_argument("--threads", type=int, default=None, help="CPU threads for CREST")
     parser.add_argument("--max-tautomers", type=int, default=1000, help="RDKit maxTautomers")
