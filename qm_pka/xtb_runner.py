@@ -1,4 +1,10 @@
-"""Wrapper around CREST for xTB geometry optimization and single-point energy."""
+"""Wrapper around CREST for xTB geometry optimization and single-point energy.
+
+All CREST commands use -newversion to ensure CREST uses its internal tblite
+backend rather than the standalone xtb binary. This avoids a Fortran format
+string bug in xtb 6.7.1 build 2 (github.com/grimme-lab/xtb/issues/1332)
+which is forced by gcp-correction's mctc-lib <0.4 pin.
+"""
 
 from __future__ import annotations
 
@@ -38,6 +44,7 @@ def optimize(
             "--gfn2" if gfn == 2 else f"--gfn{gfn}",
             "--chrg",
             str(charge),
+            "-newversion",  # use tblite backend, not standalone xtb
             "--optlev",
             opt_level,
             "--mdopt",
@@ -100,6 +107,7 @@ def single_point(
             "--gfn2" if gfn == 2 else f"--gfn{gfn}",
             "--chrg",
             str(charge),
+            "-newversion",  # use tblite backend, not standalone xtb
         ]
         if solvent is not None:
             cmd.extend(["--alpb", solvent])

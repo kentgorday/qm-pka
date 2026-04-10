@@ -13,12 +13,12 @@ check = { depends-on = ["lint", "format-check", "typecheck"] }
 
 [dependencies]
 crest = ">=3.0.2,<4"
-# gcp-correction = ">=2.3.2,<3"  # disabled: pins mctc-lib <0.4, forcing xtb build 2 which has
-# a Fortran format string bug (github.com/grimme-lab/xtb/issues/1332). Re-enable when gcp-correction
-# updates its mctc-lib constraint to allow >=0.4.
+gcp-correction = ">=2.3.2,<3"
 psi4 = ">=1.10,<2"
 rdkit = ">=2024.03,<2026"
-xtb = { version = ">=6.7.1,<7", build = "*_4" }  # build 4+ fixes Fortran format string bug
+# NOTE: gcp-correction pins mctc-lib <0.4, forcing xtb to an old build with a Fortran
+# format string bug. We pass -newversion to all CREST commands so it uses its internal
+# tblite backend instead of the standalone xtb binary, avoiding the bug entirely.
 pytest = ">=9.0.3,<10"
 mypy = ">=1.20.0,<2"
 
