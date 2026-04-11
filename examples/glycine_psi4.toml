@@ -1,0 +1,29 @@
+# pKa prediction for glycine using Psi4 backend
+#
+# Psi4 refinement defaults to gas-phase optimization (wB97X-3c/vDZP)
+# because Psi4 lacks analytical PCM gradients.
+
+[molecule]
+smiles = "NCC(=O)O"
+charge_min = -1
+charge_max = 1
+
+[sampling]
+approach = "crest_first"
+ewin = 6.0
+prescreen_mode = "quick"
+full_mode = "default"
+
+[refinement]
+# Psi4 defaults: wB97X-3c / vDZP / no solvent
+ewin = 10.0
+
+[scoring]
+# Psi4 defaults: wB97M-V / def2-QZVPPD / IEFPCM
+solvent = "water"
+ewin = 10.0
+
+[compute]
+driver = "psi4"
+threads = 4
+output_dir = "glycine_output"
