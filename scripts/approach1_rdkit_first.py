@@ -19,8 +19,9 @@ from qm_pka.rdkit_utils import (
     get_formal_charge,
     smiles_to_3d,
 )
-from qm_pka.types import ChargeState, Ensemble, Microstate
-from qm_pka.xtb_runner import optimize
+from qm_pka.stereo import enumerate_and_deduplicate
+from qm_pka.types import ChargeState, Conformer, Ensemble, Microstate
+from qm_pka.xtb_runner import optimize, single_point
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
@@ -87,28 +88,51 @@ def run_approach1(
                 expanded.update(tau_list)
             species_at_q = expanded
 
-        log.info(f"  {len(species_at_q)} unique microstate(s) at charge {q}")
+        log.info(f"  {len(species_at_q)} unique tautomer(s) at charge {q}")
+
+        # Enumerate stereoisomers for each tautomer, deduplicate enantiomers
+        stereo_species: dict[str, bool] = {}
+        for smi in species_at_q:
+            for stereo_smi, has_enant in enumerate_and_deduplicate(smi):
+                if stereo_smi not in stereo_species:
+                    stereo_species[stereo_smi] = has_enant
+        log.info(
+            f"  {len(stereo_species)} unique microstate(s) at charge {q} "
+            f"(after stereoisomer enumeration + enantiomer dedup)"
+        )
 
         microstates: list[Microstate] = []
-        for smi in sorted(species_at_q):
-            log.info(f"  Conformer search for {smi}...")
+        for smi, has_enant in sorted(stereo_species.items()):
+            log.info(f"  Conformer search for {smi} (enantiomer: {has_enant})...")
             try:
                 geom_3d, explicit_h_smi = smiles_to_3d(smi)
                 geom_opt = optimize(geom_3d, charge=q, solvent=solvent)
-                conformers = conformer_search(
-                    geom_opt,
-                    charge=q,
-                    solvent=solvent,
-                    ewin=ewin,
-                    mode=crest_mode,
-                    threads=threads,
-                )
-                log.info(f"    Found {len(conformers)} conformer(s)")
+                try:
+                    conformers = conformer_search(
+                        geom_opt,
+                        charge=q,
+                        solvent=solvent,
+                        ewin=ewin,
+                        mode=crest_mode,
+                        threads=threads,
+                    )
+                    log.info(f"    Found {len(conformers)} conformer(s)")
+                except RuntimeError:
+                    # CREST conformer search can fail for certain charged
+                    # molecules (known tblite issue). Fall back to the
+                    # xTB-optimized geometry as a single conformer.
+                    log.warning(
+                        f"    Conformer search failed for {smi}, "
+                        f"falling back to single optimized geometry"
+                    )
+                    energy = single_point(geom_opt, charge=q, solvent=solvent)
+                    conformers = [Conformer(geometry=geom_opt, energy=energy)]
                 microstates.append(
                     Microstate(
                         tautomer_id=smi,
                         conformers=conformers,
                         smiles=explicit_h_smi,
+                        includes_enantiomer=has_enant,
                     )
                 )
             except Exception as e:

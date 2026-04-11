@@ -13,7 +13,7 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["rdkit.*", "psi4.*"]
+module = ["rdkit.*", "psi4.*", "pyscf.*"]
 ignore_missing_imports = true
 
 [tool.ruff]

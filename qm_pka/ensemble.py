@@ -55,15 +55,22 @@ def charge_state_free_energy(
     """Compute the free energy of a charge state.
 
     Boltzmann-averages over all microstates and all conformers within
-    the charge state, treating them as a single flat ensemble.
+    the charge state. Microstates with includes_enantiomer=True contribute
+    a degeneracy factor of 2 (both enantiomers have identical energies but
+    are distinct microstates in the partition function).
     """
-    all_energies: list[float] = []
-    for ms in charge_state.microstates:
-        for conf in ms.conformers:
-            all_energies.append(conf.energy)
-    if not all_energies:
+    if not any(ms.conformers for ms in charge_state.microstates):
         raise ValueError(f"Charge state {charge_state.charge} has no conformers")
-    return ensemble_free_energy(all_energies, temperature)
+
+    # Collect (energy, multiplicity) pairs for partition function
+    kbt = KB_HARTREE * temperature
+    e_min = min(conf.energy for ms in charge_state.microstates for conf in ms.conformers)
+    z = 0.0
+    for ms in charge_state.microstates:
+        multiplicity = 2 if ms.includes_enantiomer else 1
+        for conf in ms.conformers:
+            z += multiplicity * np.exp(-(conf.energy - e_min) / kbt)
+    return float(e_min - kbt * np.log(z))
 
 
 def assign_weights(ensemble: Ensemble, temperature: float = 298.15) -> None:
@@ -71,20 +78,24 @@ def assign_weights(ensemble: Ensemble, temperature: float = 298.15) -> None:
 
     Weights are normalized across all conformers in a charge state
     (spanning all microstates), since macroscopic pKa depends on the
-    full partition function of each charge state.
+    full partition function of each charge state. Microstates with
+    includes_enantiomer=True get double weight (both enantiomers
+    contribute to the partition function).
     """
+    kbt = KB_HARTREE * temperature
     for cs in ensemble.charge_states.values():
-        all_conformers: list[Conformer] = []
-        all_energies: list[float] = []
+        entries: list[tuple[Conformer, int]] = []
         for ms in cs.microstates:
+            multiplicity = 2 if ms.includes_enantiomer else 1
             for conf in ms.conformers:
-                all_conformers.append(conf)
-                all_energies.append(conf.energy)
-        if not all_energies:
+                entries.append((conf, multiplicity))
+        if not entries:
             continue
-        weights = boltzmann_weights(all_energies, temperature)
-        for conf, w in zip(all_conformers, weights, strict=True):
-            conf.weight = w
+        e_min = min(conf.energy for conf, _ in entries)
+        raw_weights = [mult * np.exp(-(conf.energy - e_min) / kbt) for conf, mult in entries]
+        total = sum(raw_weights)
+        for (conf, _), w in zip(entries, raw_weights, strict=True):
+            conf.weight = float(w / total)
 
 
 def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
@@ -118,6 +129,7 @@ def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
                 {
                     "tautomer_id": ms.tautomer_id,
                     "smiles": ms.smiles,
+                    "includes_enantiomer": ms.includes_enantiomer,
                     "n_conformers": len(ms.conformers),
                     "conformers": conf_list,
                 }
@@ -164,6 +176,7 @@ def load_ensemble(path: Path) -> Ensemble:
                     tautomer_id=ms_data["tautomer_id"],
                     conformers=conformers,
                     smiles=ms_data.get("smiles"),
+                    includes_enantiomer=ms_data.get("includes_enantiomer", False),
                 )
             )
         ensemble.charge_states[charge] = ChargeState(charge=charge, microstates=microstates)
