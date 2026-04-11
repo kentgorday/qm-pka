@@ -4,6 +4,9 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
+from rdkit.Chem import GetPeriodicTable
+
+_PT = GetPeriodicTable()
 
 
 @dataclass
@@ -32,6 +35,14 @@ class Geometry:
     @property
     def hydrogen_indices(self) -> list[int]:
         return [i for i, s in enumerate(self.symbols) if s == "H"]
+
+    def n_electrons(self, charge: int) -> int:
+        """Total electron count for the given molecular charge."""
+        return int(sum(_PT.GetAtomicNumber(s) for s in self.symbols)) - charge
+
+    def multiplicity(self, charge: int) -> int:
+        """Spin multiplicity (2S+1). Assumes lowest multiplicity (singlet or doublet)."""
+        return 1 + self.n_electrons(charge) % 2
 
 
 @dataclass
