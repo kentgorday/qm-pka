@@ -50,6 +50,7 @@ class Microstate:
     tautomer_id: str  # canonical SMILES (approach 1) or fingerprint hash (approach 2)
     conformers: list[Conformer]
     smiles: str | None = None  # explicit-H canonical SMILES (approach 1), None in approach 2
+    includes_enantiomer: bool = False  # True if this represents a collapsed enantiomeric pair
 
 
 @dataclass

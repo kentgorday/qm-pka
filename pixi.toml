@@ -25,3 +25,9 @@ mypy = ">=1.20.0,<2"
 [pypi-dependencies]
 qm-pka = { path = ".", editable = true }
 ruff = ">=0.11,<1"
+# PySCF for DFT optimization with implicit solvation (PCM).
+# Psi4: wB97X-3c (gas-phase only — no analytical PCM gradients available).
+# PySCF: wB97X-D3BJ + PCM (ddCOSMO) — supports analytical solvation gradients,
+#   so we can optimize geometries in implicit solvent. Comparing both backends
+#   lets us evaluate speed vs predictive accuracy for pKa.
+pyscf = { version = ">=2.7,<3", extras = ["dispersion"] }
