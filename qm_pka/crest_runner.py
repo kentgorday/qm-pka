@@ -8,12 +8,15 @@ which is forced by gcp-correction's mctc-lib <0.4 pin.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import tempfile
 from pathlib import Path
 
 from qm_pka.types import Conformer, Geometry
 from qm_pka.xyz_io import read_multi_xyz, write_xyz
+
+log = logging.getLogger(__name__)
 
 
 def conformer_search(
@@ -114,7 +117,17 @@ def deprotonate(
         if not output_file.exists():
             return []
         conformers = read_multi_xyz(output_file)
-        return [c.geometry for c in conformers]
+        expected_atoms = geom.n_atoms - 1
+        validated: list[Geometry] = []
+        for c in conformers:
+            if c.geometry.n_atoms == expected_atoms:
+                validated.append(c.geometry)
+            else:
+                log.warning(
+                    f"CREST deprotonate returned structure with {c.geometry.n_atoms} atoms "
+                    f"(expected {expected_atoms}), discarding"
+                )
+        return validated
     finally:
         if cleanup:
             import shutil
@@ -143,7 +156,17 @@ def protonate(
         if not output_file.exists():
             return []
         conformers = read_multi_xyz(output_file)
-        return [c.geometry for c in conformers]
+        expected_atoms = geom.n_atoms + 1
+        validated: list[Geometry] = []
+        for c in conformers:
+            if c.geometry.n_atoms == expected_atoms:
+                validated.append(c.geometry)
+            else:
+                log.warning(
+                    f"CREST protonate returned structure with {c.geometry.n_atoms} atoms "
+                    f"(expected {expected_atoms}), discarding"
+                )
+        return validated
     finally:
         if cleanup:
             import shutil
