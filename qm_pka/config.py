@@ -27,8 +27,8 @@ _REFINEMENT_DEFAULTS: dict[str, dict[str, object]] = {
         "solvent_model": None,
     },
     "pyscf": {
-        "method": "wB97X-D3BJ",
-        "basis": "def2-TZVPD",
+        "method": "wB97X-3c",
+        "basis": "vDZP",
         "solvent_model": "SMD",
     },
 }

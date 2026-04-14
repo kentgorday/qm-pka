@@ -83,8 +83,8 @@ class TestDriverDefaults:
             driver = "pyscf"
         """)
         )
-        assert cfg.refinement.method == "wB97X-D3BJ"
-        assert cfg.refinement.basis == "def2-TZVPD"
+        assert cfg.refinement.method == "wB97X-3c"
+        assert cfg.refinement.basis == "vDZP"
         assert cfg.refinement.solvent_model == "SMD"
         assert cfg.scoring.method == "wB97M-V"
         assert cfg.scoring.basis == "def2-QZVPPD"
@@ -99,8 +99,8 @@ class TestDriverDefaults:
             driver = "pyscf"
         """)
         )
-        assert cfg.refinement.method == "wB97X-D3BJ"
-        assert cfg.refinement.basis == "def2-TZVPD"
+        assert cfg.refinement.method == "wB97X-3c"
+        assert cfg.refinement.basis == "vDZP"
         assert cfg.refinement.solvent_model is None
         assert cfg.scoring.solvent_model is None
 
