@@ -23,7 +23,7 @@ pytest = ">=9.0.3,<10"
 mypy = ">=1.20.0,<2"
 # DFT backends: Psi4 (subprocess) and PySCF (Python library).
 # Psi4: wB97X-3c gas-phase (no analytical PCM gradients).
-# PySCF: wB97X-D3BJ + SMD (analytical solvation gradients for geometry optimization).
+# PySCF: wB97X-3c/vDZP (default refinement) or wB97M-V + SMD (scoring).
 pyscf = ">=2.7,<3"
 # Dispersion corrections: dftd3-python and dftd4-python provide the shared
 # libraries used by both Psi4 and PySCF. pyscf-dispersion is the PySCF
@@ -31,6 +31,9 @@ pyscf = ">=2.7,<3"
 dftd3-python = ">=1.0"
 dftd4-python = ">=4.0"
 pyscf-dispersion = ">=1.0"
+# Basis set exchange: provides vDZP basis set for wB97X-3c (not in PySCF's
+# built-in basis library).
+basis_set_exchange = ">=0.12,<0.13"
 
 [pypi-dependencies]
 qm-pka = { path = ".", editable = true }

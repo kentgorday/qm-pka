@@ -2,7 +2,7 @@
 #
 # Three-stage workflow:
 #   1. Sampling   — CREST conformer/tautomer/protonation enumeration (GFN2-xTB)
-#   2. Refinement — geometry optimization (wB97X-D3BJ/def2-TZVPD + SMD)
+#   2. Refinement — geometry optimization (wB97X-3c/vDZP + SMD)
 #   3. Scoring    — single-point energy + RRHO (wB97M-V/def2-QZVPPD + SMD)
 
 [molecule]
@@ -15,7 +15,7 @@ approach = "rdkit_first"
 ewin = 6.0
 
 [refinement]
-# PySCF defaults: wB97X-D3BJ / def2-TZVPD / SMD
+# PySCF defaults: wB97X-3c / vDZP / SMD
 solvent = "water"
 ewin = 10.0
 
