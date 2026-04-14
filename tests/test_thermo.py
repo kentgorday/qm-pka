@@ -1,4 +1,6 @@
 from qm_pka.thermo import (
+    DEFAULT_SCALE_THERMAL,
+    DEFAULT_SCALE_ZPVE,
     QRRHO_CUTOFF,
     _grimme_weight,
     quasi_rrho_free_energy,
@@ -35,12 +37,6 @@ class TestQuasiRRHOFreeEnergy:
         g = quasi_rrho_free_energy([3000.0])
         assert g > 0  # ZPE contribution is positive
 
-    def test_near_zero_modes_excluded(self) -> None:
-        # Translational/rotational modes (< 10 cm⁻¹) should be skipped
-        g_with = quasi_rrho_free_energy([3000.0, 5.0, 3.0, 0.1])
-        g_without = quasi_rrho_free_energy([3000.0])
-        assert abs(g_with - g_without) < 1e-12
-
     def test_imaginary_frequencies_treated_as_real(self) -> None:
         # Imaginary frequencies (negative values) are treated as real
         # using their absolute value
@@ -50,8 +46,8 @@ class TestQuasiRRHOFreeEnergy:
 
     def test_water_frequencies(self) -> None:
         # Water has 3 vibrational modes: ~1595, ~3657, ~3756 cm⁻¹
-        # Plus 3 translational + 3 rotational (near zero)
-        freqs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1595.0, 3657.0, 3756.0]
+        # (T/R modes already projected out by the QM backend)
+        freqs = [1595.0, 3657.0, 3756.0]
         g = quasi_rrho_free_energy(freqs, temperature=298.15)
         # ZPE of water: ~0.5 * (1595 + 3657 + 3756) cm⁻¹ ≈ 4504 cm⁻¹
         # In Hartree: ~0.0205
@@ -69,10 +65,6 @@ class TestQuasiRRHOFreeEnergy:
         g = quasi_rrho_free_energy([])
         assert g == 0.0
 
-    def test_all_near_zero_returns_zero(self) -> None:
-        g = quasi_rrho_free_energy([0.0, 0.0, 0.0, 5.0, 3.0, 1.0])
-        assert g == 0.0
-
     def test_low_frequency_damped(self) -> None:
         # A very low frequency (50 cm⁻¹) should use mostly free-rotor
         # entropy, giving a more negative -TS contribution than pure HO
@@ -81,3 +73,33 @@ class TestQuasiRRHOFreeEnergy:
         # Low freq mode has smaller ZPE but more favorable entropy
         # -> lower free energy
         assert g_low_freq < g_high_freq
+
+
+class TestFrequencyScaling:
+    def test_default_scale_factors(self) -> None:
+        assert DEFAULT_SCALE_ZPVE == 0.9856
+        assert DEFAULT_SCALE_THERMAL == 0.9627
+
+    def test_no_scaling_gives_higher_free_energy(self) -> None:
+        # Unscaled frequencies are higher -> larger ZPE -> higher G_vib
+        freqs = [1595.0, 3657.0, 3756.0]
+        g_scaled = quasi_rrho_free_energy(freqs)
+        g_unscaled = quasi_rrho_free_energy(freqs, scale_zpve=1.0, scale_thermal=1.0)
+        assert g_unscaled > g_scaled
+
+    def test_scaling_affects_result(self) -> None:
+        # Verify scaling actually changes the result (not silently ignored)
+        freqs = [1000.0, 2000.0, 3000.0]
+        g_default = quasi_rrho_free_energy(freqs)
+        g_custom = quasi_rrho_free_energy(freqs, scale_zpve=0.95, scale_thermal=0.90)
+        assert g_default != g_custom
+
+    def test_zpve_and_thermal_scale_independently(self) -> None:
+        # Changing only one scale factor should change the result
+        freqs = [1000.0, 2000.0]
+        g_ref = quasi_rrho_free_energy(freqs, scale_zpve=1.0, scale_thermal=1.0)
+        g_zpve_only = quasi_rrho_free_energy(freqs, scale_zpve=0.98, scale_thermal=1.0)
+        g_thermal_only = quasi_rrho_free_energy(freqs, scale_zpve=1.0, scale_thermal=0.96)
+        assert g_ref != g_zpve_only
+        assert g_ref != g_thermal_only
+        assert g_zpve_only != g_thermal_only
