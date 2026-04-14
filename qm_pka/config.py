@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Driver-specific defaults
 # ---------------------------------------------------------------------------
-_REFINEMENT_DEFAULTS: dict[str, dict[str, object]] = {
+_REFINEMENT_DEFAULTS: dict[str, dict[str, str | None]] = {
     "psi4": {
         "method": "wB97X-3c",
         "basis": "vDZP",
@@ -33,7 +33,7 @@ _REFINEMENT_DEFAULTS: dict[str, dict[str, object]] = {
     },
 }
 
-_SCORING_DEFAULTS: dict[str, dict[str, object]] = {
+_SCORING_DEFAULTS: dict[str, dict[str, str | None]] = {
     "psi4": {
         "method": "wB97M-V",
         "basis": "def2-QZVPPD",
@@ -172,8 +172,8 @@ def load_config(path: Path) -> PkaConfig:
         ref_defaults.get("solvent_model") if ref_solvent is not None else None,
     )
     refinement = RefinementConfig(
-        method=ref_raw.get("method", str(ref_defaults["method"])),
-        basis=ref_raw.get("basis", str(ref_defaults["basis"])),
+        method=ref_raw.get("method", ref_defaults["method"]),
+        basis=ref_raw.get("basis", ref_defaults["basis"]),
         solvent_model=ref_solvent_model,
         solvent=ref_solvent,
         ewin=ref_raw.get("ewin", 10.0),
@@ -188,8 +188,8 @@ def load_config(path: Path) -> PkaConfig:
         score_defaults.get("solvent_model") if score_solvent is not None else None,
     )
     scoring = ScoringConfig(
-        method=score_raw.get("method", str(score_defaults["method"])),
-        basis=score_raw.get("basis", str(score_defaults["basis"])),
+        method=score_raw.get("method", score_defaults["method"]),
+        basis=score_raw.get("basis", score_defaults["basis"]),
         solvent_model=score_solvent_model,
         solvent=score_solvent,
         ewin=score_raw.get("ewin", 10.0),

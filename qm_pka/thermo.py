@@ -28,28 +28,47 @@ AVOGADRO = 6.02214076e23
 # Default cutoff for quasi-RRHO damping (cm⁻¹)
 QRRHO_CUTOFF = 100.0
 
+# Frequency scaling factors from Kesharwani, Brauer, Martin, J. Phys. Chem. A
+# 2015, 119, 1701.  These correct for the systematic overestimation of
+# calculated harmonic frequencies vs experimental fundamentals.  For modern
+# DFT functionals with sufficient basis sets, ZPVE scale factors are
+# virtually always ~0.98 and thermal/entropy factors ~0.96.
+DEFAULT_SCALE_ZPVE = 0.9856
+DEFAULT_SCALE_THERMAL = 0.9627
+
 
 def quasi_rrho_free_energy(
     frequencies_cm: list[float],
     temperature: float = 298.15,
     cutoff: float = QRRHO_CUTOFF,
     pressure: float = 101325.0,
+    scale_zpve: float = DEFAULT_SCALE_ZPVE,
+    scale_thermal: float = DEFAULT_SCALE_THERMAL,
 ) -> float:
     """Compute the vibrational free energy correction using quasi-RRHO.
 
     Uses Grimme's interpolation between harmonic oscillator and free
     rotor for low-frequency modes (below `cutoff` cm⁻¹).
 
+    Harmonic frequencies are scaled to correct for systematic
+    overestimation vs experiment (Kesharwani, Brauer, Martin, J. Phys.
+    Chem. A 2015, 119, 1701).  Separate scale factors are applied to
+    the ZPVE and thermal (enthalpy + entropy) contributions.
+
     Args:
-        frequencies_cm: Vibrational frequencies in cm⁻¹. The first 6
-            (or 5 for linear) should be near-zero translational/rotational
-            modes — these are automatically excluded (|freq| < 10 cm⁻¹).
+        frequencies_cm: Vibrational frequencies in cm⁻¹.  Must contain
+            only true vibrational modes (translational and rotational
+            modes should already be projected out by the QM backend).
             Imaginary frequencies (negative values) are treated as real
             using their absolute value.
         temperature: Temperature in Kelvin.
         cutoff: Frequency cutoff for quasi-RRHO damping in cm⁻¹.
         pressure: Pressure in Pa (for translational entropy, unused here
             since we only compute vibrational contributions).
+        scale_zpve: Scale factor for ZPVE contributions (~0.98 for
+            modern functionals with sufficient basis sets).
+        scale_thermal: Scale factor for thermal enthalpy and entropy
+            contributions (~0.96 for modern functionals).
 
     Returns:
         Vibrational free energy correction in Hartree.
@@ -61,9 +80,6 @@ def quasi_rrho_free_energy(
 
     g_vib = 0.0
     for freq in frequencies_cm:
-        # Skip translational/rotational modes and imaginary frequencies
-        if abs(freq) < 10.0:
-            continue
         # Treat imaginary frequencies as real (use absolute value).
         # Small imaginary frequencies at a nominally optimized geometry are
         # typically numerical artifacts, not true saddle points.
@@ -74,20 +90,23 @@ def quasi_rrho_free_energy(
             )
             freq = abs(freq)
 
-        # Convert frequency to energy
-        hv = H_PLANCK * C_LIGHT * freq  # energy of one quantum, Joules
+        # Scaled frequencies for each contribution
+        freq_zpve = freq * scale_zpve
+        freq_thermal = freq * scale_thermal
 
-        # ZPE contribution
-        zpe = 0.5 * hv
+        # ZPE contribution (scaled)
+        hv_zpve = H_PLANCK * C_LIGHT * freq_zpve
+        zpe = 0.5 * hv_zpve
 
-        # Thermal enthalpy: hv / (exp(hv/kT) - 1)
-        x = hv * beta
-        h_vib = hv / (np.exp(x) - 1.0)
+        # Thermal enthalpy: hv / (exp(hv/kT) - 1) (scaled)
+        hv_thermal = H_PLANCK * C_LIGHT * freq_thermal
+        x = hv_thermal * beta
+        h_vib = hv_thermal / (np.exp(x) - 1.0)
 
-        # Entropy: quasi-RRHO interpolation
-        s_ho = _entropy_ho(freq, temperature)
-        s_fr = _entropy_free_rotor(freq, temperature)
-        w = _grimme_weight(freq, cutoff)
+        # Entropy: quasi-RRHO interpolation (using thermal-scaled frequency)
+        s_ho = _entropy_ho(freq_thermal, temperature)
+        s_fr = _entropy_free_rotor(freq_thermal, temperature)
+        w = _grimme_weight(freq_thermal, cutoff)
         s_vib = w * s_ho + (1.0 - w) * s_fr
 
         # G = ZPE + H_thermal - T*S  (per mode, in Joules)

@@ -18,7 +18,6 @@ import tempfile
 from typing import Any
 
 import numpy as np
-from numpy.typing import NDArray
 
 from qm_pka.types import Geometry
 
@@ -236,7 +235,7 @@ def optimize(
         mol_opt = geom_optimize(mf, maxsteps=200, tmpdir=tmpdir)
 
     # Extract optimized coordinates (PySCF stores in Bohr)
-    coords_bohr: NDArray[np.float64] = np.asarray(mol_opt.atom_coords(), dtype=np.float64)
+    coords_bohr = np.asarray(mol_opt.atom_coords(), dtype=np.float64)
     coords_ang = coords_bohr * BOHR_TO_ANG
     symbols = tuple(mol_opt.elements)
 
@@ -279,52 +278,13 @@ def frequencies(
 
     hessian = mf.Hessian().kernel()
 
-    # Reshape from (natm, natm, 3, 3) to (3*natm, 3*natm)
-    n_atoms = mol.natm
-    hess_2d = hessian.transpose(0, 2, 1, 3).reshape(3 * n_atoms, 3 * n_atoms)
+    # Use PySCF's built-in harmonic analysis, which projects out
+    # translational and rotational modes before diagonalization.
+    from pyscf.hessian.thermo import harmonic_analysis
 
-    return _harmonic_analysis(mol, hess_2d)
-
-
-def _harmonic_analysis(mol: Any, hess: NDArray[np.float64]) -> list[float]:
-    """Diagonalize mass-weighted Hessian and return frequencies in cm⁻¹.
-
-    Follows standard normal mode analysis:
-    1. Mass-weight the Hessian
-    2. Diagonalize
-    3. Convert eigenvalues to frequencies
-    """
-    # Atomic masses in amu
-    masses = np.array([mol.atom_mass_list()[i] for i in range(mol.natm)])
-
-    # Build mass-weighting matrix: 1/sqrt(m_i) for each coordinate
-    mass_weights = np.repeat(1.0 / np.sqrt(masses), 3)
-    mass_weighted_hess = np.outer(mass_weights, mass_weights) * hess
-
-    # Diagonalize
-    eigenvalues = np.linalg.eigvalsh(mass_weighted_hess)
-
-    # Convert eigenvalues to frequencies in cm⁻¹
-    # eigenvalue is in Hartree/(Bohr² * amu)
-    # frequency = sqrt(eigenvalue) / (2*pi*c) converted to cm⁻¹
-    hartree_to_joule = 4.3597447222071e-18
-    bohr_to_meter = 5.29177210903e-11
-    amu_to_kg = 1.66053906660e-27
-    speed_of_light = 2.99792458e10  # cm/s
-
-    # Convert eigenvalue units: Hartree/(Bohr² * amu) -> J/(m² * kg) = 1/s²
-    conv = hartree_to_joule / (bohr_to_meter**2 * amu_to_kg)
-
-    freqs: list[float] = []
-    for ev in sorted(eigenvalues):
-        ev_si = ev * conv
-        if ev_si < 0:
-            freq = -np.sqrt(-ev_si) / (2.0 * np.pi * speed_of_light)
-        else:
-            freq = np.sqrt(ev_si) / (2.0 * np.pi * speed_of_light)
-        freqs.append(float(freq))
-
-    return freqs
+    results = harmonic_analysis(mol, hessian, imaginary_freq=False)
+    freqs_cm: Any = results["freq_wavenumber"]
+    return [float(f) for f in freqs_cm]
 
 
 # Common solvent dielectric constants
