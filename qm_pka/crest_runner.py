@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 from qm_pka.types import Conformer, Geometry
+from qm_pka.xtb_runner import single_point
 from qm_pka.xyz_io import read_multi_xyz, write_xyz
 
 log = logging.getLogger(__name__)
@@ -59,7 +60,20 @@ def conformer_search(
         output_file = work_dir / "crest_conformers.xyz"
         if not output_file.exists():
             raise FileNotFoundError(f"CREST did not produce crest_conformers.xyz in {work_dir}")
-        return read_multi_xyz(output_file)
+        conformers = read_multi_xyz(output_file)
+
+        # When solvent was used, the XYZ energies include ALPB solvation.
+        # Run gas-phase single points to decompose into electronic + solvation.
+        if solvent is not None:
+            for conf in conformers:
+                total = conf.electronic_energy
+                assert total is not None
+                gas_phase = single_point(conf.geometry, charge=charge, solvent=None)
+                conf.electronic_energy = gas_phase
+                conf.solvation_energy = total - gas_phase
+            log.info(f"Decomposed solvation for {len(conformers)} conformer(s) via gas-phase SP")
+
+        return conformers
     finally:
         if cleanup:
             import shutil

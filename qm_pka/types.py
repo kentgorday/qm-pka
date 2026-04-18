@@ -47,11 +47,39 @@ class Geometry:
 
 @dataclass
 class Conformer:
-    """A molecular conformer with its energy."""
+    """A molecular conformer with decomposed energy components.
+
+    Energy components are populated at different stages of the pipeline:
+      - electronic_energy: gas-phase electronic energy (Hartree).
+        Set at sampling (xTB) and replaced at refinement/scoring (DFT).
+      - solvation_energy: solvation free energy contribution (Hartree).
+        At sampling, computed as (CREST ALPB total) - (gas-phase xTB SP).
+        At refinement/scoring, from implicit solvent model (SMD/PCM).
+      - rrho_correction: quasi-RRHO vibrational free energy (Hartree).
+        Set after frequency calculation at the configured rrho_level.
+
+    The free_energy property sums all non-None components for Boltzmann
+    weighting and partition function calculations.
+    """
 
     geometry: Geometry
-    energy: float  # Hartree (xTB/CREST at sampling; replaced by DFT later)
+    electronic_energy: float | None = None  # E_elec (Hartree)
+    solvation_energy: float | None = None  # ΔG_solv (Hartree)
+    rrho_correction: float | None = None  # G_RRHO (Hartree)
     weight: float | None = None  # Boltzmann weight within its microstate
+
+    @property
+    def free_energy(self) -> float:
+        """Total free energy: sum of all non-None energy components."""
+        components = [
+            self.electronic_energy,
+            self.solvation_energy,
+            self.rrho_correction,
+        ]
+        active = [c for c in components if c is not None]
+        if not active:
+            raise ValueError("Conformer has no energy components set")
+        return sum(active)
 
 
 @dataclass

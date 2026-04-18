@@ -64,12 +64,12 @@ def charge_state_free_energy(
 
     # Collect (energy, multiplicity) pairs for partition function
     kbt = KB_HARTREE * temperature
-    e_min = min(conf.energy for ms in charge_state.microstates for conf in ms.conformers)
+    e_min = min(conf.free_energy for ms in charge_state.microstates for conf in ms.conformers)
     z = 0.0
     for ms in charge_state.microstates:
         multiplicity = 2 if ms.includes_enantiomer else 1
         for conf in ms.conformers:
-            z += multiplicity * np.exp(-(conf.energy - e_min) / kbt)
+            z += multiplicity * np.exp(-(conf.free_energy - e_min) / kbt)
     return float(e_min - kbt * np.log(z))
 
 
@@ -91,8 +91,8 @@ def assign_weights(ensemble: Ensemble, temperature: float = 298.15) -> None:
                 entries.append((conf, multiplicity))
         if not entries:
             continue
-        e_min = min(conf.energy for conf, _ in entries)
-        raw_weights = [mult * np.exp(-(conf.energy - e_min) / kbt) for conf, mult in entries]
+        e_min = min(conf.free_energy for conf, _ in entries)
+        raw_weights = [mult * np.exp(-(conf.free_energy - e_min) / kbt) for conf, mult in entries]
         total = sum(raw_weights)
         for (conf, _), w in zip(entries, raw_weights, strict=True):
             conf.weight = float(w / total)
@@ -121,7 +121,10 @@ def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
                     {
                         "symbols": list(conf.geometry.symbols),
                         "coords": conf.geometry.coords.tolist(),
-                        "energy": conf.energy,
+                        "electronic_energy": conf.electronic_energy,
+                        "solvation_energy": conf.solvation_energy,
+                        "rrho_correction": conf.rrho_correction,
+                        "free_energy": conf.free_energy,
                         "weight": conf.weight,
                     }
                 )
@@ -167,7 +170,9 @@ def load_ensemble(path: Path) -> Ensemble:
                 conformers.append(
                     Conformer(
                         geometry=geom,
-                        energy=conf_data["energy"],
+                        electronic_energy=conf_data.get("electronic_energy"),
+                        solvation_energy=conf_data.get("solvation_energy"),
+                        rrho_correction=conf_data.get("rrho_correction"),
                         weight=conf_data.get("weight"),
                     )
                 )
@@ -239,9 +244,9 @@ def ensemble_to_sdf(ensemble: Ensemble, output_path: Path) -> Path:
     writer = Chem.SDWriter(str(output_path))
 
     for charge, cs in sorted(ensemble.charge_states.items()):
-        sorted_ms = sorted(cs.microstates, key=lambda m: min(c.energy for c in m.conformers))
+        sorted_ms = sorted(cs.microstates, key=lambda m: min(c.free_energy for c in m.conformers))
         for ms in sorted_ms:
-            for conf in sorted(ms.conformers, key=lambda c: c.energy):
+            for conf in sorted(ms.conformers, key=lambda c: c.free_energy):
                 if ms.smiles is not None:
                     mol = _mol_from_smiles_and_coords(ms.smiles, conf.geometry, charge)
                 else:
@@ -251,7 +256,13 @@ def ensemble_to_sdf(ensemble: Ensemble, output_path: Path) -> Path:
                 mol.SetProp("tautomer_id", ms.tautomer_id)
                 if ms.smiles is not None:
                     mol.SetProp("smiles", ms.smiles)
-                mol.SetDoubleProp("energy_hartree", conf.energy)
+                mol.SetDoubleProp("free_energy_hartree", conf.free_energy)
+                if conf.electronic_energy is not None:
+                    mol.SetDoubleProp("electronic_energy_hartree", conf.electronic_energy)
+                if conf.solvation_energy is not None:
+                    mol.SetDoubleProp("solvation_energy_hartree", conf.solvation_energy)
+                if conf.rrho_correction is not None:
+                    mol.SetDoubleProp("rrho_correction_hartree", conf.rrho_correction)
                 if conf.weight is not None:
                     mol.SetDoubleProp("boltzmann_weight", conf.weight)
 
