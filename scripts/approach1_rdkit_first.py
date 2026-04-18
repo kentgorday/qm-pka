@@ -125,8 +125,15 @@ def run_approach1(
                         f"    Conformer search failed for {smi}, "
                         f"falling back to single optimized geometry"
                     )
-                    energy = single_point(geom_opt, charge=q, solvent=solvent)
-                    conformers = [Conformer(geometry=geom_opt, energy=energy)]
+                    total = single_point(geom_opt, charge=q, solvent=solvent)
+                    gas_phase = single_point(geom_opt, charge=q, solvent=None)
+                    conformers = [
+                        Conformer(
+                            geometry=geom_opt,
+                            electronic_energy=gas_phase,
+                            solvation_energy=total - gas_phase if solvent is not None else None,
+                        )
+                    ]
                 microstates.append(
                     Microstate(
                         tautomer_id=smi,

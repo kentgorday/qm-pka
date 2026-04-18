@@ -19,7 +19,7 @@ from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
 def _make_conformer(energy: float) -> Conformer:
     geom = Geometry(symbols=("H",), coords=np.zeros((1, 3)))
-    return Conformer(geometry=geom, energy=energy)
+    return Conformer(geometry=geom, electronic_energy=energy)
 
 
 class TestBoltzmannWeights:
@@ -118,7 +118,9 @@ class TestSerialization:
                     microstates=[
                         Microstate(
                             tautomer_id="abc123",
-                            conformers=[Conformer(geometry=geom, energy=-76.43, weight=1.0)],
+                            conformers=[
+                                Conformer(geometry=geom, electronic_energy=-76.43, weight=1.0)
+                            ],
                             smiles="O",
                         ),
                     ],
@@ -132,7 +134,7 @@ class TestSerialization:
         assert 0 in ens2.charge_states
         assert len(ens2.charge_states[0].microstates) == 1
         conf = ens2.charge_states[0].microstates[0].conformers[0]
-        assert conf.energy == pytest.approx(-76.43)
+        assert conf.electronic_energy == pytest.approx(-76.43)
         np.testing.assert_allclose(conf.geometry.coords, geom.coords, atol=1e-8)
 
 
@@ -162,7 +164,9 @@ class TestEnsembleToSdf:
                     microstates=[
                         Microstate(
                             tautomer_id="O",
-                            conformers=[Conformer(geometry=geom, energy=-76.4, weight=1.0)],
+                            conformers=[
+                                Conformer(geometry=geom, electronic_energy=-76.4, weight=1.0)
+                            ],
                             smiles="[H]O[H]",
                         ),
                     ],
@@ -180,7 +184,7 @@ class TestEnsembleToSdf:
         assert mol.GetNumBonds() == 2
         assert int(mol.GetProp("charge")) == 0
         assert mol.GetProp("tautomer_id") == "O"
-        assert float(mol.GetDoubleProp("energy_hartree")) == pytest.approx(-76.4)
+        assert float(mol.GetDoubleProp("free_energy_hartree")) == pytest.approx(-76.4)
 
     def test_without_smiles(self, tmp_path: Path) -> None:
         """Approach 2: no SMILES, bonds from rdDetermineBonds."""
@@ -193,7 +197,9 @@ class TestEnsembleToSdf:
                     microstates=[
                         Microstate(
                             tautomer_id="fp_abc",
-                            conformers=[Conformer(geometry=geom, energy=-76.4, weight=1.0)],
+                            conformers=[
+                                Conformer(geometry=geom, electronic_energy=-76.4, weight=1.0)
+                            ],
                             smiles=None,
                         ),
                     ],
@@ -220,8 +226,8 @@ class TestEnsembleToSdf:
                         Microstate(
                             tautomer_id="O",
                             conformers=[
-                                Conformer(geometry=geom, energy=-76.4, weight=0.6),
-                                Conformer(geometry=geom, energy=-76.3, weight=0.4),
+                                Conformer(geometry=geom, electronic_energy=-76.4, weight=0.6),
+                                Conformer(geometry=geom, electronic_energy=-76.3, weight=0.4),
                             ],
                             smiles="[H]O[H]",
                         ),
@@ -238,7 +244,7 @@ class TestEnsembleToSdf:
                                         symbols=("H", "O"),
                                         coords=np.array([[0.96, 0.0, 0.0], [0.0, 0.0, 0.0]]),
                                     ),
-                                    energy=-75.8,
+                                    electronic_energy=-75.8,
                                     weight=1.0,
                                 ),
                             ],

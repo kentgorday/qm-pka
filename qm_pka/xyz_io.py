@@ -33,7 +33,7 @@ def read_multi_xyz(path: Path) -> list[Conformer]:
         frame_lines = lines[i : i + n_atoms + 2]
         geom = _parse_single_xyz(frame_lines)
         energy = _parse_comment_energy(frame_lines[1])
-        conformers.append(Conformer(geometry=geom, energy=energy))
+        conformers.append(Conformer(geometry=geom, electronic_energy=energy))
         i += n_atoms + 2
     return conformers
 
@@ -47,7 +47,7 @@ def write_multi_xyz(conformers: list[Conformer], path: Path) -> None:
     """Write a multi-structure XYZ file with energies in comment lines."""
     blocks: list[str] = []
     for conf in conformers:
-        blocks.append(_format_xyz(conf.geometry, f"{conf.energy:.10f}"))
+        blocks.append(_format_xyz(conf.geometry, f"{conf.free_energy:.10f}"))
     path.write_text("\n".join(blocks))
 
 

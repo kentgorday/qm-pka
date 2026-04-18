@@ -45,8 +45,8 @@ class TestReadMultiXyz:
         p.write_text(MULTI_XYZ)
         conformers = read_multi_xyz(p)
         assert len(conformers) == 2
-        assert conformers[0].energy == pytest.approx(-76.43)
-        assert conformers[1].energy == pytest.approx(-76.4295)
+        assert conformers[0].electronic_energy == pytest.approx(-76.43)
+        assert conformers[1].electronic_energy == pytest.approx(-76.4295)
         assert conformers[0].geometry.symbols == ("O", "H", "H")
 
 
@@ -76,12 +76,12 @@ class TestWriteMultiXyz:
         geom1 = Geometry(symbols=("H", "H"), coords=np.array([[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]]))
         geom2 = Geometry(symbols=("H", "H"), coords=np.array([[0.0, 0.0, 0.0], [0.75, 0.0, 0.0]]))
         confs = [
-            Conformer(geometry=geom1, energy=-1.17),
-            Conformer(geometry=geom2, energy=-1.16),
+            Conformer(geometry=geom1, electronic_energy=-1.17),
+            Conformer(geometry=geom2, electronic_energy=-1.16),
         ]
         p = tmp_path / "h2.xyz"
         write_multi_xyz(confs, p)
         confs2 = read_multi_xyz(p)
         assert len(confs2) == 2
-        assert confs2[0].energy == pytest.approx(-1.17)
-        assert confs2[1].energy == pytest.approx(-1.16)
+        assert confs2[0].electronic_energy == pytest.approx(-1.17)
+        assert confs2[1].electronic_energy == pytest.approx(-1.16)

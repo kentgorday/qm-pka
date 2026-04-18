@@ -35,9 +35,9 @@ def _filter_by_energy_window(conformers: list[Conformer], ewin_kcal: float) -> l
     """Keep conformers within ewin kcal/mol of the lowest energy."""
     if not conformers:
         return []
-    e_min = min(c.energy for c in conformers)
+    e_min = min(c.free_energy for c in conformers)
     ewin_hartree = ewin_kcal / HARTREE_TO_KCAL
-    return [c for c in conformers if (c.energy - e_min) <= ewin_hartree]
+    return [c for c in conformers if (c.free_energy - e_min) <= ewin_hartree]
 
 
 def _step_charge(
@@ -175,8 +175,15 @@ def _run_crest_pipeline_for_stereoisomer(
                         f"falling back to single optimized geometry"
                     )
                     geom_opt = optimize(representative, charge=q, solvent=solvent)
-                    energy = single_point(geom_opt, charge=q, solvent=solvent)
-                    conformers = [Conformer(geometry=geom_opt, energy=energy)]
+                    total = single_point(geom_opt, charge=q, solvent=solvent)
+                    gas_phase = single_point(geom_opt, charge=q, solvent=None)
+                    conformers = [
+                        Conformer(
+                            geometry=geom_opt,
+                            electronic_energy=gas_phase,
+                            solvation_energy=total - gas_phase if solvent is not None else None,
+                        )
+                    ]
                 microstates.append(
                     Microstate(
                         tautomer_id=fp,
@@ -281,8 +288,8 @@ def run_approach2(
                 seen[ms.tautomer_id] = ms
             else:
                 # Keep the one with the lower best energy
-                existing_best = min(c.energy for c in seen[ms.tautomer_id].conformers)
-                new_best = min(c.energy for c in ms.conformers)
+                existing_best = min(c.free_energy for c in seen[ms.tautomer_id].conformers)
+                new_best = min(c.free_energy for c in ms.conformers)
                 if new_best < existing_best:
                     seen[ms.tautomer_id] = ms
         ensemble.charge_states[q] = ChargeState(charge=q, microstates=list(seen.values()))

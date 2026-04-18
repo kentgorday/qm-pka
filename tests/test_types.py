@@ -36,15 +36,38 @@ class TestGeometry:
 class TestConformer:
     def test_construction(self) -> None:
         geom = Geometry(symbols=("H", "H"), coords=np.array([[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]]))
-        conf = Conformer(geometry=geom, energy=-1.5)
-        assert conf.energy == -1.5
+        conf = Conformer(geometry=geom, electronic_energy=-1.5)
+        assert conf.electronic_energy == -1.5
+        assert conf.solvation_energy is None
+        assert conf.rrho_correction is None
         assert conf.weight is None
+
+    def test_free_energy_electronic_only(self) -> None:
+        geom = Geometry(symbols=("H", "H"), coords=np.array([[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]]))
+        conf = Conformer(geometry=geom, electronic_energy=-1.5)
+        assert conf.free_energy == -1.5
+
+    def test_free_energy_all_components(self) -> None:
+        geom = Geometry(symbols=("H", "H"), coords=np.array([[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]]))
+        conf = Conformer(
+            geometry=geom,
+            electronic_energy=-1.5,
+            solvation_energy=-0.01,
+            rrho_correction=0.02,
+        )
+        assert conf.free_energy == pytest.approx(-1.49)
+
+    def test_free_energy_no_components_raises(self) -> None:
+        geom = Geometry(symbols=("H", "H"), coords=np.array([[0.0, 0.0, 0.0], [0.74, 0.0, 0.0]]))
+        conf = Conformer(geometry=geom)
+        with pytest.raises(ValueError, match="no energy components"):
+            _ = conf.free_energy
 
 
 class TestMicrostate:
     def test_construction(self) -> None:
         geom = Geometry(symbols=("H",), coords=np.zeros((1, 3)))
-        conf = Conformer(geometry=geom, energy=-1.0)
+        conf = Conformer(geometry=geom, electronic_energy=-1.0)
         ms = Microstate(tautomer_id="[H][H]", conformers=[conf], smiles="[H][H]")
         assert ms.smiles == "[H][H]"
         assert len(ms.conformers) == 1
