@@ -136,12 +136,15 @@ def _build_mf(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    threads: int = 1,
 ) -> tuple[Any, Any]:
     """Build a PySCF Mole and mean-field object with the requested settings.
 
     Returns (mol, mf) where mf is ready for .kernel().
     """
-    from pyscf import dft, gto
+    from pyscf import dft, gto, lib
+
+    lib.num_threads(threads)
 
     xc_string, _d4_param = _resolve_method(method)
     resolved_basis = _resolve_basis(basis, list(geom.symbols))
@@ -186,6 +189,9 @@ def _build_mf(
         if solvent_model_upper == "SMD":
             mf = pyscf_solvent.SMD(mf)
             mf.with_solvent.solvent = solvent
+        elif solvent_model_upper in ("DDPCM", "IEFPCM", "PCM", "SSVPE"):
+            mf = pyscf_solvent.ddPCM(mf)
+            mf.with_solvent.eps = _solvent_dielectric(solvent)
         elif solvent_model_upper in ("DDCOSMO", "COSMO", "CPCM"):
             mf = pyscf_solvent.ddCOSMO(mf)
             mf.with_solvent.eps = _solvent_dielectric(solvent)
@@ -202,12 +208,13 @@ def single_point(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    threads: int = 1,
 ) -> float:
     """Run a single-point DFT energy calculation.
 
     Returns the total energy in Hartree.
     """
-    _mol, mf = _build_mf(geom, charge, method, basis, solvent_model, solvent)
+    _mol, mf = _build_mf(geom, charge, method, basis, solvent_model, solvent, threads)
     energy = mf.kernel()
     if not mf.converged:
         raise RuntimeError(f"PySCF SCF did not converge for method={method}, basis={basis}")
@@ -221,6 +228,7 @@ def optimize(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    threads: int = 1,
 ) -> tuple[Geometry, float]:
     """Run DFT geometry optimization.
 
@@ -228,7 +236,7 @@ def optimize(
     """
     from pyscf.geomopt.geometric_solver import optimize as geom_optimize
 
-    _mol, mf = _build_mf(geom, charge, method, basis, solvent_model, solvent)
+    _mol, mf = _build_mf(geom, charge, method, basis, solvent_model, solvent, threads)
 
     # geometric writes temporary files; use a temp dir
     with tempfile.TemporaryDirectory(prefix="pyscf_opt_") as tmpdir:
@@ -254,6 +262,7 @@ def frequencies(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    threads: int = 1,
 ) -> list[float]:
     """Compute harmonic vibrational frequencies.
 
@@ -271,7 +280,7 @@ def frequencies(
             f"Hessian: falling up from {method} to {hess_method} for analytical second derivatives"
         )
 
-    mol, mf = _build_mf(geom, charge, hess_method, basis, solvent_model, solvent)
+    mol, mf = _build_mf(geom, charge, hess_method, basis, solvent_model, solvent, threads)
     mf.kernel()
     if not mf.converged:
         raise RuntimeError(f"PySCF SCF did not converge for method={hess_method}, basis={basis}")

@@ -57,6 +57,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/freetype-py-2.3.0-pyhd8ed1ab_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gau2grid-2.0.8-hb9d3cd8_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/gcp-correction-2.3.2-gfortran_hee85f66_2.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/geometric-1.1-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/greenlet-3.3.2-py313h5d5ffb9_0.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/h5py-3.16.0-nompi_py313h253c126_102.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/hdf5-1.14.6-nompi_h19486de_106.conda
@@ -259,6 +260,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/noarch/freetype-py-2.3.0-pyhd8ed1ab_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/gau2grid-2.0.8-hc71e825_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/gcp-correction-2.3.2-gfortran_h4779c71_2.conda
+      - conda: https://conda.anaconda.org/conda-forge/noarch/geometric-1.1-pyhd8ed1ab_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/greenlet-3.3.2-py313h1188861_0.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/h5py-3.16.0-nompi_py313hc6ee213_102.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/hdf5-1.14.6-nompi_had3affe_106.conda
@@ -1411,6 +1413,22 @@ packages:
   purls: []
   size: 136265
   timestamp: 1775574549290
+- conda: https://conda.anaconda.org/conda-forge/noarch/geometric-1.1-pyhd8ed1ab_1.conda
+  sha256: 1303a076ab36deec732c55adc4f3beebea04f82148e999e1cfb5bd52e540e0e2
+  md5: 6cc2168965a7f8d18e79979ab6902dfc
+  depends:
+  - networkx
+  - numpy
+  - python >=3.9
+  - scipy
+  - setuptools
+  - six
+  license: MIT
+  license_family: MIT
+  purls:
+  - pkg:pypi/geometric?source=hash-mapping
+  size: 316847
+  timestamp: 1738095671100
 - conda: https://conda.anaconda.org/conda-forge/linux-64/greenlet-3.3.2-py313h5d5ffb9_0.conda
   sha256: bef83cb6284c3332be5eb4129dce0cbe87a4c0f64cff3d6a0ded3dd5c6e673c2
   md5: 0199b03b39892320265af92b5e3e9093

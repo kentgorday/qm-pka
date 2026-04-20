@@ -34,6 +34,8 @@ pyscf-dispersion = ">=1.0"
 # Basis set exchange: provides vDZP basis set for wB97X-3c (not in PySCF's
 # built-in basis library).
 basis_set_exchange = ">=0.12,<0.13"
+# geomeTRIC: geometry optimizer used by PySCF for DFT refinement stage.
+geometric = ">=1.0"
 
 [pypi-dependencies]
 qm-pka = { path = ".", editable = true }

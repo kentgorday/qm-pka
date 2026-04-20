@@ -55,6 +55,7 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
     # Stage 2: Refinement
     log.info("=== Stage 2: Refinement ===")
     ref = config.refinement
+    threads = config.compute.threads or 1
     refine(
         ensemble,
         driver_name=config.compute.driver,
@@ -64,6 +65,7 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
         solvent=ref.solvent,
         ewin=ref.ewin,
         compute_rrho=config.scoring.rrho_level == "refinement",
+        threads=threads,
     )
     serialize_ensemble(ensemble, output_dir / "refinement")
 
@@ -84,6 +86,7 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
         solvent=sc.solvent,
         ewin=sc.ewin,
         compute_rrho=sc.rrho_level == "scoring",
+        threads=threads,
     )
 
     # Final: assign Boltzmann weights

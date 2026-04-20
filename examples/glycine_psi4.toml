@@ -25,5 +25,5 @@ ewin = 10.0
 
 [compute]
 driver = "psi4"
-threads = 4
+threads = 6
 output_dir = "glycine_output"

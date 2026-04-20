@@ -38,6 +38,7 @@ def score(
     solvent: str | None = None,
     ewin: float = 10.0,
     compute_rrho: bool = False,
+    threads: int = 1,
 ) -> Ensemble:
     """Score all conformers via high-level DFT single-point energy.
 
@@ -69,13 +70,16 @@ def score(
                             basis,
                             solvent_model,
                             solvent,
+                            threads=threads,
                         )
-                        gas = driver.single_point(conf.geometry, cs.charge, method, basis)
+                        gas = driver.single_point(
+                            conf.geometry, cs.charge, method, basis, threads=threads
+                        )
                         conf.electronic_energy = gas
                         conf.solvation_energy = total - gas
                     else:
                         conf.electronic_energy = driver.single_point(
-                            conf.geometry, cs.charge, method, basis
+                            conf.geometry, cs.charge, method, basis, threads=threads
                         )
                         conf.solvation_energy = None
 
@@ -87,6 +91,7 @@ def score(
                             basis,
                             solvent_model,
                             solvent,
+                            threads=threads,
                         )
                         conf.rrho_correction = quasi_rrho_free_energy(freqs)
 
