@@ -98,6 +98,23 @@ def assign_weights(ensemble: Ensemble, temperature: float = 298.15) -> None:
             conf.weight = float(w / total)
 
 
+def filter_charge_state_by_energy(cs: ChargeState, ewin_kcal: float) -> None:
+    """Remove conformers outside the energy window within a charge state.
+
+    The window is relative to the lowest free_energy across all conformers
+    in all microstates of this charge state. Microstates with no surviving
+    conformers are pruned.
+    """
+    all_conformers = [c for ms in cs.microstates for c in ms.conformers]
+    if not all_conformers:
+        return
+    e_min = min(c.free_energy for c in all_conformers)
+    ewin_hartree = ewin_kcal / HARTREE_TO_KCAL
+    for ms in cs.microstates:
+        ms.conformers = [c for c in ms.conformers if (c.free_energy - e_min) <= ewin_hartree]
+    cs.microstates = [ms for ms in cs.microstates if ms.conformers]
+
+
 def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
     """Write ensemble to a single JSON file with inline coordinates.
 
