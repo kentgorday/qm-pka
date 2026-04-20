@@ -1,0 +1,32 @@
+# pKa prediction for 3-amino-2-butanol
+# Sampling: RDKit-first | Driver: PySCF
+#
+# Three-stage workflow:
+#   1. Sampling   — RDKit tautomer/charge enum + CREST conformers (GFN2-xTB)
+#   2. Refinement — geometry optimization (wB97X-3c/vDZP + IEFPCM)
+#   3. Scoring    — single-point energy + RRHO (wB97M-V/def2-QZVPPD + IEFPCM)
+
+[molecule]
+smiles = "CC(O)C(N)C"
+charge_min = -2
+charge_max = 2
+
+[sampling]
+approach = "rdkit_first"
+ewin = 10.0
+
+[refinement]
+# PySCF defaults: wB97X-3c / vDZP / IEFPCM (ddPCM)
+solvent = "water"
+ewin = 10.0
+
+[scoring]
+# PySCF defaults: wB97M-V / def2-QZVPPD / IEFPCM (ddPCM)
+solvent = "water"
+ewin = 10.0
+rrho_level = "refinement"
+
+[compute]
+driver = "pyscf"
+threads = 6
+output_dir = "aminobutanol_rdkit_pyscf_output"

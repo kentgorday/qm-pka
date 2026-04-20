@@ -38,6 +38,7 @@ def refine(
     solvent: str | None = None,
     ewin: float = 10.0,
     compute_rrho: bool = False,
+    threads: int = 1,
 ) -> Ensemble:
     """Refine all conformers via DFT geometry optimization.
 
@@ -69,12 +70,15 @@ def refine(
                         basis,
                         solvent_model,
                         solvent,
+                        threads=threads,
                     )
                     conf.geometry = opt_geom
 
                     if solvent_model is not None:
                         # opt_energy includes solvation — decompose
-                        gas_energy = driver.single_point(opt_geom, cs.charge, method, basis)
+                        gas_energy = driver.single_point(
+                            opt_geom, cs.charge, method, basis, threads=threads
+                        )
                         conf.electronic_energy = gas_energy
                         conf.solvation_energy = opt_energy - gas_energy
                     else:
@@ -89,6 +93,7 @@ def refine(
                             basis,
                             solvent_model,
                             solvent,
+                            threads=threads,
                         )
                         conf.rrho_correction = quasi_rrho_free_energy(freqs)
 

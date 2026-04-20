@@ -1,0 +1,37 @@
+# pKa prediction for 3-amino-2-butanol
+# Sampling: CREST-first | Driver: Psi4
+#
+# Three-stage workflow:
+#   1. Sampling   — CREST physics-based tautomer/charge enum + conformers (GFN2-xTB)
+#   2. Refinement — geometry optimization (wB97X-3c/vDZP, gas phase)
+#   3. Scoring    — single-point energy + RRHO (wB97M-V/def2-QZVPPD + IEFPCM)
+#
+# Note: Psi4 lacks analytical PCM gradients, so refinement runs in gas phase.
+# Solvation is captured at the scoring stage via IEFPCM single points.
+
+[molecule]
+smiles = "CC(O)C(N)C"
+charge_min = -2
+charge_max = 2
+
+[sampling]
+approach = "crest_first"
+ewin = 10.0
+prescreen_ewin = 6.0
+prescreen_mode = "quick"
+full_mode = "default"
+
+[refinement]
+# Psi4 defaults: wB97X-3c / vDZP / no solvent
+ewin = 10.0
+
+[scoring]
+# Psi4 defaults: wB97M-V / def2-QZVPPD / IEFPCM
+solvent = "water"
+ewin = 10.0
+rrho_level = "refinement"
+
+[compute]
+driver = "psi4"
+threads = 6
+output_dir = "aminobutanol_crest_psi4_output"

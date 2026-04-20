@@ -95,6 +95,7 @@ def single_point(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    threads: int = 1,
 ) -> float:
     """Run a single-point DFT energy calculation.
 
@@ -120,7 +121,7 @@ E = energy('{method}')
 psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 """
 
-    output, _work_dir = _run_psi4(input_text)
+    output, _work_dir = _run_psi4(input_text, threads=threads)
     return _parse_final_energy(output)
 
 
@@ -131,6 +132,7 @@ def optimize(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    threads: int = 1,
 ) -> tuple[Geometry, float]:
     """Run DFT geometry optimization.
 
@@ -147,6 +149,7 @@ molecule mol {{
 set {{
 {opts_block}
   geom_maxiter 200
+  dynamic_level 1
 }}
 """
     if solvent_model is not None and solvent is not None:
@@ -158,7 +161,7 @@ psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 wfn.molecule().save_xyz_file('optimized.xyz', True)
 """
 
-    output, work_dir = _run_psi4(input_text)
+    output, work_dir = _run_psi4(input_text, threads=threads)
     energy = _parse_final_energy(output)
     opt_geom = read_xyz(work_dir / "optimized.xyz")
 
@@ -172,6 +175,7 @@ def frequencies(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    threads: int = 1,
 ) -> list[float]:
     """Compute harmonic vibrational frequencies.
 
@@ -201,7 +205,7 @@ with open('frequencies.dat', 'w') as f:
 psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 """
 
-    _output, work_dir = _run_psi4(input_text)
+    _output, work_dir = _run_psi4(input_text, threads=threads)
 
     freq_list: list[float] = []
     for line in (work_dir / "frequencies.dat").read_text().splitlines():
@@ -220,6 +224,7 @@ psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 def _run_psi4(
     input_text: str,
     timeout: int = 86400,
+    threads: int = 1,
 ) -> tuple[str, Path]:
     """Write a Psi4 input file, run psi4, return (output_text, work_dir).
 
@@ -238,7 +243,7 @@ def _run_psi4(
         "-o",
         str(output_path),
         "-n",
-        "1",  # single thread (caller manages parallelism)
+        str(threads),
     ]
 
     log.info(f"Running Psi4 in {work_dir}")

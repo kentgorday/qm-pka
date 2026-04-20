@@ -29,7 +29,7 @@ _REFINEMENT_DEFAULTS: dict[str, dict[str, str | None]] = {
     "pyscf": {
         "method": "wB97X-3c",
         "basis": "vDZP",
-        "solvent_model": "SMD",
+        "solvent_model": "IEFPCM",
     },
 }
 
@@ -42,7 +42,7 @@ _SCORING_DEFAULTS: dict[str, dict[str, str | None]] = {
     "pyscf": {
         "method": "wB97M-V",
         "basis": "def2-QZVPPD",
-        "solvent_model": "SMD",
+        "solvent_model": "IEFPCM",
     },
 }
 
