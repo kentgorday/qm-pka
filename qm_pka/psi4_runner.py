@@ -294,6 +294,24 @@ _PSI4_SOLVENT_NAMES: dict[str, str] = {
 }
 
 
+def rotational_symmetry_number(geom: Geometry) -> int:
+    """Detect the rotational symmetry number sigma_rot from the 3D geometry.
+
+    Uses Psi4's built-in point-group detector via
+    `Molecule.rotational_symmetry_number()`, which returns sigma for the full
+    point group (not the abelian subgroup Psi4 uses for electronic structure).
+    """
+    import psi4  # type: ignore[import-untyped]
+
+    xyz_lines = [
+        f"{sym}  {x:.10f}  {y:.10f}  {z:.10f}"
+        for sym, (x, y, z) in zip(geom.symbols, geom.coords, strict=True)
+    ]
+    mol = psi4.geometry("\n".join(xyz_lines) + "\nunits angstrom\nno_reorient\nno_com")
+    mol.update_geometry()
+    return int(mol.rotational_symmetry_number())
+
+
 def _psi4_solvent_name(solvent: str) -> str:
     """Map a common solvent name to Psi4's expected format."""
     key = solvent.lower()

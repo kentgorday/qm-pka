@@ -30,5 +30,5 @@ rrho_level = "refinement"
 
 [compute]
 driver = "psi4"
-threads = 6
+threads = 8
 output_dir = "aminobutanol_rdkit_psi4_output"

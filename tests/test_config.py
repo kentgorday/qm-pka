@@ -85,10 +85,10 @@ class TestDriverDefaults:
         )
         assert cfg.refinement.method == "wB97X-3c"
         assert cfg.refinement.basis == "vDZP"
-        assert cfg.refinement.solvent_model == "IEFPCM"
+        assert cfg.refinement.solvent_model == "SSVPE"
         assert cfg.scoring.method == "wB97M-V"
         assert cfg.scoring.basis == "def2-QZVPPD"
-        assert cfg.scoring.solvent_model == "IEFPCM"
+        assert cfg.scoring.solvent_model == "SSVPE"
 
     def test_pyscf_defaults_gas_phase(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
@@ -277,7 +277,7 @@ class TestExampleConfigs:
         cfg = load_config(Path("examples/glycine_pyscf.toml"))
         assert cfg.molecule.smiles == "NCC(=O)O"
         assert cfg.compute.driver == "pyscf"
-        assert cfg.refinement.solvent_model == "IEFPCM"
+        assert cfg.refinement.solvent_model == "SSVPE"
 
     def test_glycine_psi4(self) -> None:
         cfg = load_config(Path("examples/glycine_psi4.toml"))

@@ -181,24 +181,63 @@ def _build_mf(
         mf.nlcgrids.atom_grid = (50, 194)
         mf.nlcgrids.prune = None
 
-    # Implicit solvent
+    # Implicit solvent.  Prefer the analytical PCM (with proper gradients)
+    # over the experimental ddPCM/ddCOSMO domain-decomposed variants.
     if solvent_model is not None and solvent is not None:
         from pyscf import solvent as pyscf_solvent
 
-        solvent_model_upper = solvent_model.upper()
+        solvent_model_upper = solvent_model.upper().replace("-", "")
+        # Map user-facing names to the analytical PCM "method" string.
+        pcm_method_map = {
+            "PCM": "IEF-PCM",
+            "IEFPCM": "IEF-PCM",
+            "CPCM": "C-PCM",
+            "COSMO": "COSMO",
+            "SSVPE": "SS(V)PE",
+        }
         if solvent_model_upper == "SMD":
             mf = pyscf_solvent.SMD(mf)
             mf.with_solvent.solvent = solvent
-        elif solvent_model_upper in ("DDPCM", "IEFPCM", "PCM", "SSVPE"):
+        elif solvent_model_upper in pcm_method_map:
+            mf = pyscf_solvent.PCM(mf)
+            mf.with_solvent.method = pcm_method_map[solvent_model_upper]
+            mf.with_solvent.eps = _solvent_dielectric(solvent)
+        elif solvent_model_upper == "DDPCM":
             mf = pyscf_solvent.ddPCM(mf)
             mf.with_solvent.eps = _solvent_dielectric(solvent)
-        elif solvent_model_upper in ("DDCOSMO", "COSMO", "CPCM"):
+        elif solvent_model_upper == "DDCOSMO":
             mf = pyscf_solvent.ddCOSMO(mf)
             mf.with_solvent.eps = _solvent_dielectric(solvent)
         else:
             raise ValueError(f"Unknown PySCF solvent model: {solvent_model!r}")
 
+    # SCF robustness: allow more iterations for difficult cases (especially
+    # in implicit solvent).  Default is 50; bump to 100.
+    mf.max_cycle = 100
+
     return mol, mf
+
+
+def _run_scf_robust(mf: Any) -> float:
+    """Run SCF; on non-convergence, retry with second-order SCF (.newton())."""
+    energy = mf.kernel()
+    if mf.converged:
+        return float(energy)
+
+    log.warning("SCF did not converge; retrying with second-order SCF (Newton)")
+    dm = mf.make_rdm1()
+    mf_newton = mf.newton()
+    mf_newton.max_cycle = 100
+    energy = mf_newton.kernel(dm0=dm)
+    if not mf_newton.converged:
+        raise RuntimeError("PySCF SCF failed to converge even with Newton solver")
+    # Copy converged density back so any subsequent operations see it
+    mf.converged = True
+    mf.e_tot = mf_newton.e_tot
+    mf.mo_coeff = mf_newton.mo_coeff
+    mf.mo_occ = mf_newton.mo_occ
+    mf.mo_energy = mf_newton.mo_energy
+    return float(energy)
 
 
 def single_point(
@@ -215,10 +254,7 @@ def single_point(
     Returns the total energy in Hartree.
     """
     _mol, mf = _build_mf(geom, charge, method, basis, solvent_model, solvent, threads)
-    energy = mf.kernel()
-    if not mf.converged:
-        raise RuntimeError(f"PySCF SCF did not converge for method={method}, basis={basis}")
-    return float(energy)
+    return _run_scf_robust(mf)
 
 
 def optimize(
@@ -238,9 +274,13 @@ def optimize(
 
     _mol, mf = _build_mf(geom, charge, method, basis, solvent_model, solvent, threads)
 
-    # geometric writes temporary files; use a temp dir
+    # Pre-converge SCF with retry so the optimizer starts from a good density.
+    _run_scf_robust(mf)
+
+    # geometric writes temporary files; use a temp dir.  Cap at 100 steps so
+    # bad starting geometries fail fast rather than burning hundreds of cycles.
     with tempfile.TemporaryDirectory(prefix="pyscf_opt_") as tmpdir:
-        mol_opt = geom_optimize(mf, maxsteps=200, tmpdir=tmpdir)
+        mol_opt = geom_optimize(mf, maxsteps=100, tmpdir=tmpdir)
 
     # Extract optimized coordinates (PySCF stores in Bohr)
     coords_bohr = np.asarray(mol_opt.atom_coords(), dtype=np.float64)
@@ -281,9 +321,7 @@ def frequencies(
         )
 
     mol, mf = _build_mf(geom, charge, hess_method, basis, solvent_model, solvent, threads)
-    mf.kernel()
-    if not mf.converged:
-        raise RuntimeError(f"PySCF SCF did not converge for method={hess_method}, basis={basis}")
+    _run_scf_robust(mf)
 
     hessian = mf.Hessian().kernel()
 
@@ -310,6 +348,87 @@ _DIELECTRIC: dict[str, float] = {
     "hexane": 1.88,
     "acetone": 20.7,
 }
+
+
+# Schoenflies point group -> rotational symmetry number sigma (order of proper
+# rotation subgroup).  PySCF labels linear molecules "Coov"/"Dooh" and single
+# atoms "SO3".
+_SIGMA_ROT_TABLE: dict[str, int] = {
+    "C1": 1,
+    "Cs": 1,
+    "Ci": 1,
+    "C2": 2,
+    "C3": 3,
+    "C4": 4,
+    "C5": 5,
+    "C6": 6,
+    "C7": 7,
+    "C8": 8,
+    "C2v": 2,
+    "C3v": 3,
+    "C4v": 4,
+    "C5v": 5,
+    "C6v": 6,
+    "C7v": 7,
+    "C8v": 8,
+    "C2h": 2,
+    "C3h": 3,
+    "C4h": 4,
+    "C5h": 5,
+    "C6h": 6,
+    "D2": 4,
+    "D3": 6,
+    "D4": 8,
+    "D5": 10,
+    "D6": 12,
+    "D7": 14,
+    "D8": 16,
+    "D2h": 4,
+    "D3h": 6,
+    "D4h": 8,
+    "D5h": 10,
+    "D6h": 12,
+    "D7h": 14,
+    "D8h": 16,
+    "D2d": 4,
+    "D3d": 6,
+    "D4d": 8,
+    "D5d": 10,
+    "D6d": 12,
+    "S4": 2,
+    "S6": 3,
+    "S8": 4,
+    "T": 12,
+    "Td": 12,
+    "Th": 12,
+    "O": 24,
+    "Oh": 24,
+    "I": 60,
+    "Ih": 60,
+    "Coov": 1,  # linear heteronuclear (e.g. CO, HCN)
+    "Dooh": 2,  # linear homonuclear / symmetric linear (e.g. N2, CO2)
+    "SO3": 1,  # single atom
+}
+
+
+def rotational_symmetry_number(geom: Geometry) -> int:
+    """Detect the rotational symmetry number sigma_rot from the 3D geometry.
+
+    Uses `pyscf.symm.detect_symm` to get the Schoenflies label, then looks
+    up sigma for the full point group.
+    """
+    from pyscf import symm
+
+    atoms = [
+        (sym, tuple(float(x) for x in coord))
+        for sym, coord in zip(geom.symbols, geom.coords, strict=True)
+    ]
+    label, _origin, _axes = symm.detect_symm(atoms)
+    sigma = _SIGMA_ROT_TABLE.get(label)
+    if sigma is None:
+        log.warning(f"Unknown PySCF point group label {label!r}; defaulting sigma_rot=1")
+        return 1
+    return sigma
 
 
 def _solvent_dielectric(solvent: str) -> float:
