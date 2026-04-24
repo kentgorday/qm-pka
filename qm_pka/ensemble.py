@@ -48,6 +48,18 @@ def ensemble_free_energy(
     return float(e_min - KB_HARTREE * temperature * np.log(z))
 
 
+def _microstate_multiplicity(ms: Microstate) -> float:
+    """Effective multiplicity for partition-function weighting.
+
+    Combines enantiomer degeneracy (x2 if `includes_enantiomer`) with the
+    rotational symmetry-number correction (1/sigma_rot). Higher sigma means
+    fewer distinguishable rotational orientations -> smaller q_rot -> smaller
+    weight.
+    """
+    enant = 2 if ms.includes_enantiomer else 1
+    return enant / ms.symmetry_number
+
+
 def charge_state_free_energy(
     charge_state: ChargeState,
     temperature: float = 298.15,
@@ -55,19 +67,18 @@ def charge_state_free_energy(
     """Compute the free energy of a charge state.
 
     Boltzmann-averages over all microstates and all conformers within
-    the charge state. Microstates with includes_enantiomer=True contribute
-    a degeneracy factor of 2 (both enantiomers have identical energies but
-    are distinct microstates in the partition function).
+    the charge state.  Each microstate's Boltzmann weight is multiplied
+    by an effective multiplicity combining enantiomer degeneracy and the
+    rotational symmetry number (see `_microstate_multiplicity`).
     """
     if not any(ms.conformers for ms in charge_state.microstates):
         raise ValueError(f"Charge state {charge_state.charge} has no conformers")
 
-    # Collect (energy, multiplicity) pairs for partition function
     kbt = KB_HARTREE * temperature
     e_min = min(conf.free_energy for ms in charge_state.microstates for conf in ms.conformers)
     z = 0.0
     for ms in charge_state.microstates:
-        multiplicity = 2 if ms.includes_enantiomer else 1
+        multiplicity = _microstate_multiplicity(ms)
         for conf in ms.conformers:
             z += multiplicity * np.exp(-(conf.free_energy - e_min) / kbt)
     return float(e_min - kbt * np.log(z))
@@ -78,15 +89,14 @@ def assign_weights(ensemble: Ensemble, temperature: float = 298.15) -> None:
 
     Weights are normalized across all conformers in a charge state
     (spanning all microstates), since macroscopic pKa depends on the
-    full partition function of each charge state. Microstates with
-    includes_enantiomer=True get double weight (both enantiomers
-    contribute to the partition function).
+    full partition function of each charge state. Each microstate gets
+    an effective multiplicity combining enantiomer degeneracy and sigma_rot.
     """
     kbt = KB_HARTREE * temperature
     for cs in ensemble.charge_states.values():
-        entries: list[tuple[Conformer, int]] = []
+        entries: list[tuple[Conformer, float]] = []
         for ms in cs.microstates:
-            multiplicity = 2 if ms.includes_enantiomer else 1
+            multiplicity = _microstate_multiplicity(ms)
             for conf in ms.conformers:
                 entries.append((conf, multiplicity))
         if not entries:
@@ -150,6 +160,7 @@ def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
                     "tautomer_id": ms.tautomer_id,
                     "smiles": ms.smiles,
                     "includes_enantiomer": ms.includes_enantiomer,
+                    "symmetry_number": ms.symmetry_number,
                     "n_conformers": len(ms.conformers),
                     "conformers": conf_list,
                 }
@@ -199,6 +210,7 @@ def load_ensemble(path: Path) -> Ensemble:
                     conformers=conformers,
                     smiles=ms_data.get("smiles"),
                     includes_enantiomer=ms_data.get("includes_enantiomer", False),
+                    symmetry_number=ms_data.get("symmetry_number", 1),
                 )
             )
         ensemble.charge_states[charge] = ChargeState(charge=charge, microstates=microstates)

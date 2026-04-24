@@ -109,4 +109,18 @@ def score(
             f"{n_conf} conformer(s) after filtering"
         )
 
+        # Detect sigma_rot per microstate using its lowest-energy conformer.
+        for ms in cs.microstates:
+            if not ms.conformers:
+                continue
+            lowest = min(ms.conformers, key=lambda c: c.free_energy)
+            try:
+                ms.symmetry_number = driver.rotational_symmetry_number(lowest.geometry)
+            except Exception as e:
+                log.warning(
+                    f"  sigma_rot detection failed for microstate "
+                    f"{ms.tautomer_id[:8]}: {e}; using sigma=1"
+                )
+                ms.symmetry_number = 1
+
     return ensemble
