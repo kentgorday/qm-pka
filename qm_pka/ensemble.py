@@ -153,6 +153,7 @@ def serialize_ensemble(ensemble: Ensemble, output_dir: Path) -> Path:
                         "rrho_correction": conf.rrho_correction,
                         "free_energy": conf.free_energy,
                         "weight": conf.weight,
+                        "refinement_converged": conf.refinement_converged,
                     }
                 )
             ms_list.append(
@@ -202,6 +203,7 @@ def load_ensemble(path: Path) -> Ensemble:
                         solvation_energy=conf_data.get("solvation_energy"),
                         rrho_correction=conf_data.get("rrho_correction"),
                         weight=conf_data.get("weight"),
+                        refinement_converged=conf_data.get("refinement_converged"),
                     )
                 )
             microstates.append(

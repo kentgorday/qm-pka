@@ -67,6 +67,7 @@ class Conformer:
     solvation_energy: float | None = None  # ΔG_solv (Hartree)
     rrho_correction: float | None = None  # G_RRHO (Hartree)
     weight: float | None = None  # Boltzmann weight within its microstate
+    refinement_converged: bool | None = None  # None before refinement; bool after
 
     @property
     def free_energy(self) -> float:
