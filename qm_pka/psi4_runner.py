@@ -83,7 +83,7 @@ def _pcm_block(solvent_model: str, solvent: str) -> str:
             RadiiSet = Bondi
             Type = GePol
             Scaling = True
-            Area = 0.3
+            Area = 0.1
           }}
         }}""")
 
@@ -133,10 +133,15 @@ def optimize(
     solvent_model: str | None = None,
     solvent: str | None = None,
     threads: int = 1,
-) -> tuple[Geometry, float]:
+) -> tuple[Geometry, float, bool]:
     """Run DFT geometry optimization.
 
-    Returns (optimized_geometry, final_energy_hartree).
+    optking's dynamic_level=1 allows the optimizer to adaptively change
+    parameters (coordinate system, trust radius, etc.) when progress stalls.
+
+    Returns (optimized_geometry, final_energy_hartree, converged). The
+    geometry and energy are always the latest ones, even if optking did not
+    fully converge.
     """
     mol_block = _molecule_block(geom, charge)
     opts_block = _options_block(method, basis, solvent_model)
@@ -150,22 +155,34 @@ set {{
 {opts_block}
   geom_maxiter 200
   dynamic_level 1
+  g_convergence gau
 }}
 """
     if solvent_model is not None and solvent is not None:
         input_text += "\n" + _pcm_block(solvent_model, solvent) + "\n"
 
+    # Wrap optimize() so that a non-convergence exception still yields a
+    # geometry and energy on disk (from the last optimizer step).
     input_text += f"""
-E, wfn = optimize('{method}', return_wfn=True)
+converged = True
+try:
+    E, wfn = optimize('{method}', return_wfn=True)
+except psi4.OptimizationConvergenceError as exc:
+    converged = False
+    wfn = exc.wfn
+    E = wfn.energy()
+    psi4.print_out('\\n=== OPT NOT CONVERGED: using last geometry ===\\n')
 psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
+psi4.print_out(f'\\n=== CONVERGED: {{1 if converged else 0}} ===\\n')
 wfn.molecule().save_xyz_file('optimized.xyz', True)
 """
 
     output, work_dir = _run_psi4(input_text, threads=threads)
     energy = _parse_final_energy(output)
+    converged = _parse_converged_flag(output)
     opt_geom = read_xyz(work_dir / "optimized.xyz")
 
-    return opt_geom, energy
+    return opt_geom, energy, converged
 
 
 def frequencies(
@@ -276,6 +293,17 @@ def _parse_final_energy(output: str) -> float:
     if match is None:
         raise RuntimeError("Could not parse final energy from Psi4 output")
     return float(match.group(1))
+
+
+def _parse_converged_flag(output: str) -> bool:
+    """Parse the converged flag from our sentinel line in Psi4 output.
+
+    If the flag is missing (older input templates), assume converged=True.
+    """
+    match = re.search(r"=== CONVERGED:\s+([01])\s+===", output)
+    if match is None:
+        return True
+    return match.group(1) == "1"
 
 
 # Psi4 expects specific solvent names

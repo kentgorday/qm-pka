@@ -265,34 +265,45 @@ def optimize(
     solvent_model: str | None = None,
     solvent: str | None = None,
     threads: int = 1,
-) -> tuple[Geometry, float]:
+) -> tuple[Geometry, float, bool]:
     """Run DFT geometry optimization.
 
-    Returns (optimized_geometry, final_energy_hartree).
+    Strategy: first try the default TRIC internal coordinates (100 steps).
+    If that doesn't converge, retry with Cartesian coordinates for another
+    100 steps starting from the last internal-coords geometry.  This is
+    analogous to Psi4 optking's dynamic_level mechanism.
+
+    Returns (optimized_geometry, final_energy_hartree, converged).
+    The geometry and energy are always the latest ones, regardless of
+    convergence status.
     """
-    from pyscf.geomopt.geometric_solver import optimize as geom_optimize
+    from pyscf.geomopt.geometric_solver import kernel as geom_kernel
 
-    _mol, mf = _build_mf(geom, charge, method, basis, solvent_model, solvent, threads)
+    def _run(start_geom: Geometry, coordsys: str, maxsteps: int) -> tuple[Geometry, float, bool]:
+        _mol, mf_local = _build_mf(
+            start_geom, charge, method, basis, solvent_model, solvent, threads
+        )
+        _run_scf_robust(mf_local)
+        with tempfile.TemporaryDirectory(prefix="pyscf_opt_") as tmpdir:
+            conv, mol_opt = geom_kernel(
+                mf_local, maxsteps=maxsteps, tmpdir=tmpdir, coordsys=coordsys
+            )
+        coords_ang = np.asarray(mol_opt.atom_coords(), dtype=np.float64) * BOHR_TO_ANG
+        out_geom = Geometry(symbols=tuple(mol_opt.elements), coords=coords_ang)
+        return out_geom, float(mf_local.e_tot), bool(conv)
 
-    # Pre-converge SCF with retry so the optimizer starts from a good density.
-    _run_scf_robust(mf)
+    # First attempt: default TRIC (internal coordinates)
+    opt_geom, energy, converged = _run(geom, coordsys="tric", maxsteps=100)
+    if converged:
+        return opt_geom, energy, True
 
-    # geometric writes temporary files; use a temp dir.  Cap at 100 steps so
-    # bad starting geometries fail fast rather than burning hundreds of cycles.
-    with tempfile.TemporaryDirectory(prefix="pyscf_opt_") as tmpdir:
-        mol_opt = geom_optimize(mf, maxsteps=100, tmpdir=tmpdir)
-
-    # Extract optimized coordinates (PySCF stores in Bohr)
-    coords_bohr = np.asarray(mol_opt.atom_coords(), dtype=np.float64)
-    coords_ang = coords_bohr * BOHR_TO_ANG
-    symbols = tuple(mol_opt.elements)
-
-    opt_geom = Geometry(symbols=symbols, coords=coords_ang)
-
-    # Final energy from the converged SCF on the optimized geometry
-    energy = float(mf.e_tot)
-
-    return opt_geom, energy
+    # Fallback: continue from the last geometry in Cartesian coordinates
+    log.info(
+        "Internal-coord opt did not converge in 100 steps; "
+        "retrying from last geometry with Cartesian coords"
+    )
+    opt_geom, energy, converged = _run(opt_geom, coordsys="cart", maxsteps=100)
+    return opt_geom, energy, converged
 
 
 def frequencies(

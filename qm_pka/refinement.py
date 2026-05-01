@@ -49,9 +49,13 @@ def refine(
       3. If compute_rrho is True, compute vibrational frequencies and set
          the quasi-RRHO free energy correction.
 
-    Conformers that fail (e.g. SCF non-convergence) are dropped with a
-    warning. After processing, conformers within each charge state are
-    filtered by the energy window.
+    Conformers whose optimizer ran but did not fully converge are kept
+    (with refinement_converged=False) since the last-step geometry is
+    usually good enough for conformer screening.  Conformers that raise
+    an exception (e.g. SCF non-convergence) are dropped with a warning.
+
+    After processing, conformers within each charge state are filtered by
+    the energy window.
 
     Modifies the ensemble in-place and returns it.
     """
@@ -63,7 +67,7 @@ def refine(
             surviving = []
             for conf in ms.conformers:
                 try:
-                    opt_geom, opt_energy = driver.optimize(
+                    opt_geom, opt_energy, converged = driver.optimize(
                         conf.geometry,
                         cs.charge,
                         method,
@@ -73,6 +77,13 @@ def refine(
                         threads=threads,
                     )
                     conf.geometry = opt_geom
+                    conf.refinement_converged = converged
+                    if not converged:
+                        log.warning(
+                            f"  Geometry optimization did not fully converge "
+                            f"for conformer in microstate {ms.tautomer_id[:8]}; "
+                            f"keeping last-step geometry"
+                        )
 
                     if solvent_model is not None:
                         # opt_energy includes solvation — decompose
