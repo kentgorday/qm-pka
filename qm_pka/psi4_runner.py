@@ -70,6 +70,23 @@ def _options_block(
     return "\n".join(opts)
 
 
+def _bse_basis_block(basis: str, geom: Geometry) -> str:
+    """If `basis` should be loaded from basis-set-exchange, return a
+    Psi4 input snippet that registers it via `basis_helper`. Otherwise "".
+
+    Currently only vDZP is loaded from BSE: Psi4's bundled vdzp.gbs is
+    missing fluorine (psi4/psi4#3205); the BSE copy carries the workaround
+    (a vanishingly-small d-type ECP projector on F).
+    """
+    if basis.lower() != "vdzp":
+        return ""
+    import basis_set_exchange as bse
+
+    elements = sorted(set(geom.symbols))
+    psi4_str = bse.get_basis("Grimme vDZP", fmt="psi4", elements=elements)
+    return f'\nbasis_helper("""\n{psi4_str}\n""", name="vDZP", set_option=True)\n'
+
+
 def _pcm_block(solvent_model: str, solvent: str) -> str:
     """Build the Psi4 PCM section."""
     return dedent(f"""\
@@ -116,6 +133,8 @@ set {{
     if solvent_model is not None and solvent is not None:
         input_text += "\n" + _pcm_block(solvent_model, solvent) + "\n"
 
+    input_text += _bse_basis_block(basis, geom)
+
     input_text += f"""
 E = energy('{method}')
 psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
@@ -160,6 +179,8 @@ set {{
 """
     if solvent_model is not None and solvent is not None:
         input_text += "\n" + _pcm_block(solvent_model, solvent) + "\n"
+
+    input_text += _bse_basis_block(basis, geom)
 
     # Wrap optimize() so that a non-convergence exception still yields a
     # geometry and energy on disk (from the last optimizer step).
@@ -212,6 +233,8 @@ set {{
 """
     if solvent_model is not None and solvent is not None:
         input_text += "\n" + _pcm_block(solvent_model, solvent) + "\n"
+
+    input_text += _bse_basis_block(basis, geom)
 
     input_text += f"""
 E, wfn = frequency('{method}', return_wfn=True)

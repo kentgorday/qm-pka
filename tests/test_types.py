@@ -32,6 +32,15 @@ class TestGeometry:
         geom = Geometry(symbols=("O", "H", "H"), coords=np.zeros((3, 3)))
         assert isinstance(geom.symbols, tuple)
 
+    def test_symbols_normalized_to_canonical_case(self) -> None:
+        # Psi4's save_xyz_file emits uppercase symbols ("CL"); RDKit's
+        # PeriodicTable lookup in n_electrons/multiplicity is case-sensitive.
+        geom = Geometry(symbols=("c", "CL", "BR", "h"), coords=np.zeros((4, 3)))
+        assert geom.symbols == ("C", "Cl", "Br", "H")
+        # n_electrons/multiplicity must not raise.
+        assert geom.n_electrons(0) == 6 + 17 + 35 + 1
+        assert geom.multiplicity(0) == 2  # 59 electrons -> doublet
+
 
 class TestConformer:
     def test_construction(self) -> None:
