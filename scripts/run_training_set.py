@@ -36,8 +36,14 @@ def make_toml(smi: str, output_dir: Path, driver: str, threads: int) -> str:
 
     Charge range is hardcoded to [-2, +2]. Empty charge states (e.g. when
     the molecule cannot reach -2) flow through harmlessly.
+
+    Refinement-stage solvent is only emitted for PySCF, which has analytical
+    PCM gradients. Psi4 stays gas-phase at refinement (implicit solvent there
+    would fall back to finite-difference gradients and be impractically slow).
+    Scoring is a single point, so implicit solvent is fine on either backend.
     """
     safe_smi = smi.replace('"', '\\"')
+    refinement_solvent = 'solvent = "water"\n' if driver == "pyscf" else ""
     return f'''\
 [molecule]
 smiles = "{safe_smi}"
@@ -49,8 +55,7 @@ approach = "rdkit_first"
 ewin = 10.0
 
 [refinement]
-solvent = "water"
-ewin = 10.0
+{refinement_solvent}ewin = 10.0
 
 [scoring]
 solvent = "water"

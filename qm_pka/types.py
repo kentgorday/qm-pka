@@ -23,6 +23,11 @@ class Geometry:
             )
         if self.coords.ndim != 2 or self.coords.shape[1] != 3:
             raise ValueError(f"coords must have shape (n, 3), got {self.coords.shape}")
+        # Normalize element symbols to canonical "Xy" case. Psi4's save_xyz_file
+        # writes uppercase ("CL"), while RDKit's PeriodicTable lookup is
+        # case-sensitive — without this, n_electrons/multiplicity would raise
+        # cryptically on any geometry that round-tripped through Psi4.
+        self.symbols = tuple(s.capitalize() for s in self.symbols)
 
     @property
     def n_atoms(self) -> int:
