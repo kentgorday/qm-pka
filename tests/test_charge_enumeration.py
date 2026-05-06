@@ -72,3 +72,15 @@ class TestEnumerateChargeState:
             assert len(result) >= 1, f"No species found at charge {q}"
             for smi in result:
                 assert get_formal_charge(smi) == q
+
+    def test_unreachable_target_returns_empty(self) -> None:
+        # 4-chlorothiophenol has one ionizable site (-SH); asking for q=-2
+        # is unreachable. Must return [], not a fallback species at the
+        # wrong charge — sampling would otherwise feed a neutral SMILES
+        # to DFT as a dianion.
+        assert enumerate_charge_state("Sc1cccc(Cl)c1", target_charge=-2) == []
+        # Same for the over-protonation direction on a mono-base.
+        assert enumerate_charge_state("CCN", target_charge=2) == []
+        # And from a tautomer with no ionizable sites at all (thione form
+        # of chlorothiophenol — no H on S, no path to anion).
+        assert enumerate_charge_state("S=C1C=C(Cl)C=CC1", target_charge=-1) == []

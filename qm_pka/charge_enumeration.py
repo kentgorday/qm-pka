@@ -146,7 +146,9 @@ def enumerate_charge_state(smiles: str, target_charge: int) -> list[str]:
 
     Starting from the input SMILES, iteratively applies single protonation
     or deprotonation steps until the target charge is reached. Returns all
-    unique canonical SMILES found at the target charge.
+    unique canonical SMILES found at the target charge, or an empty list
+    if the target charge is unreachable from this input (e.g. asking for
+    q=-2 on a molecule with only one ionizable site).
     """
     current_charge = get_formal_charge(smiles)
     if current_charge == target_charge:
@@ -163,7 +165,10 @@ def enumerate_charge_state(smiles: str, target_charge: int) -> list[str]:
             products = step_fn(smi)
             next_level.update(products)
         if not next_level:
-            break
+            # No further (de)protonation sites — target charge unreachable.
+            # Return [] rather than the partial-walk SMILES, which would be
+            # at the wrong charge and silently feed bogus species to DFT.
+            return []
         current_level = next_level
 
     return sorted(current_level)
