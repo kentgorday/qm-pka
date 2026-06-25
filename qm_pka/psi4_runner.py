@@ -2,7 +2,8 @@
 
 Runs Psi4 via its command-line interface, writing input files and parsing
 output. Uses an (99, 590) integration grid for all DFT calculations
-and a (50, 194) NLC grid for VV10-containing functionals.
+and a (50, 194) NLC grid for VV10-containing functionals, with Psi4's
+recommended ROBUST grid pruning.
 """
 
 from __future__ import annotations
@@ -12,7 +13,6 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from textwrap import dedent
 
 from qm_pka.types import Geometry
 from qm_pka.xyz_io import read_xyz
@@ -21,6 +21,121 @@ log = logging.getLogger(__name__)
 
 # Functionals that include VV10 nonlocal correlation
 _VV10_FUNCTIONALS = {"wb97m-v", "wb97m_v", "wb97x-v", "wb97x_v", "b97m-v", "b97m_v"}
+
+# PCM cavity radii (Angstrom), copied IN FULL from pyscf.solvent.pcm.modified_Bondi
+# (PySCF's "vdw from ASE" composite set: Bondi 1964 + Mantina 2009 + others, with
+# hydrogen forced to 1.10) so both backends build the same cavity for any element.
+# Hardcoded rather than imported so the Psi4 backend keeps no runtime dependency on
+# PySCF; a test cross-checks every value against pyscf.solvent.pcm.modified_Bondi.
+_MODIFIED_BONDI_RADII: dict[str, float] = {
+    "H": 1.1,
+    "He": 1.4,
+    "Li": 1.82,
+    "Be": 1.53,
+    "B": 1.92,
+    "C": 1.7,
+    "N": 1.55,
+    "O": 1.52,
+    "F": 1.47,
+    "Ne": 1.54,
+    "Na": 2.27,
+    "Mg": 1.73,
+    "Al": 1.84,
+    "Si": 2.1,
+    "P": 1.8,
+    "S": 1.8,
+    "Cl": 1.75,
+    "Ar": 1.88,
+    "K": 2.75,
+    "Ca": 2.31,
+    "Sc": 2.0,
+    "Ti": 2.0,
+    "V": 2.0,
+    "Cr": 2.0,
+    "Mn": 2.0,
+    "Fe": 2.0,
+    "Co": 2.0,
+    "Ni": 1.63,
+    "Cu": 1.4,
+    "Zn": 1.39,
+    "Ga": 1.87,
+    "Ge": 2.11,
+    "As": 1.85,
+    "Se": 1.9,
+    "Br": 1.85,
+    "Kr": 2.02,
+    "Rb": 3.03,
+    "Sr": 2.49,
+    "Y": 2.0,
+    "Zr": 2.0,
+    "Nb": 2.0,
+    "Mo": 2.0,
+    "Tc": 2.0,
+    "Ru": 2.0,
+    "Rh": 2.0,
+    "Pd": 1.63,
+    "Ag": 1.72,
+    "Cd": 1.58,
+    "In": 1.93,
+    "Sn": 2.17,
+    "Sb": 2.06,
+    "Te": 2.06,
+    "I": 1.98,
+    "Xe": 2.16,
+    "Cs": 3.43,
+    "Ba": 2.49,
+    "La": 2.0,
+    "Ce": 2.0,
+    "Pr": 2.0,
+    "Nd": 2.0,
+    "Pm": 2.0,
+    "Sm": 2.0,
+    "Eu": 2.0,
+    "Gd": 2.0,
+    "Tb": 2.0,
+    "Dy": 2.0,
+    "Ho": 2.0,
+    "Er": 2.0,
+    "Tm": 2.0,
+    "Yb": 2.0,
+    "Lu": 2.0,
+    "Hf": 2.0,
+    "Ta": 2.0,
+    "W": 2.0,
+    "Re": 2.0,
+    "Os": 2.0,
+    "Ir": 2.0,
+    "Pt": 1.75,
+    "Au": 1.66,
+    "Hg": 1.55,
+    "Tl": 1.96,
+    "Pb": 2.02,
+    "Bi": 2.07,
+    "Po": 1.97,
+    "At": 2.02,
+    "Rn": 2.2,
+    "Fr": 3.48,
+    "Ra": 2.83,
+    "Ac": 2.0,
+    "Th": 2.0,
+    "Pa": 2.0,
+    "U": 1.86,
+    "Np": 2.0,
+    "Pu": 2.0,
+    "Am": 2.0,
+    "Cm": 2.0,
+    "Bk": 2.0,
+    "Cf": 2.0,
+    "Es": 2.0,
+    "Fm": 2.0,
+    "Md": 2.0,
+    "No": 2.0,
+    "Lr": 2.0,
+}
+# PCMSolver applies no scaling in Mode=Explicit, so the emitted radii are
+# pre-scaled by the same factor PySCF uses (vdw_scale) and Psi4's Bondi+Scaling
+# default alpha.
+_PCM_RADII_SCALING = 1.2
 
 
 def _molecule_block(geom: Geometry, charge: int) -> str:
@@ -47,6 +162,9 @@ def _options_block(
         f"  basis {basis}",
         "  dft_radial_points 99",
         "  dft_spherical_points 590",
+        # ROBUST: Psi4's recommended region-based pruning (Bragg-Slater
+        # radius zones).  Single keyword; Psi4 has no separate VV10 control.
+        "  dft_pruning_scheme robust",
     ]
 
     # VV10 NLC grid
@@ -87,22 +205,58 @@ def _bse_basis_block(basis: str, geom: Geometry) -> str:
     return f'\nbasis_helper("""\n{psi4_str}\n""", name="vDZP", set_option=True)\n'
 
 
-def _pcm_block(solvent_model: str, solvent: str) -> str:
-    """Build the Psi4 PCM section."""
-    return dedent(f"""\
-        pcm = {{
-          Units = Angstrom
-          Medium {{
-            SolverType = {solvent_model}
-            Solvent = {_psi4_solvent_name(solvent)}
-          }}
-          Cavity {{
-            RadiiSet = Bondi
-            Type = GePol
-            Scaling = True
-            Area = 0.1
-          }}
-        }}""")
+def _pcm_block(
+    solvent_model: str,
+    solvent: str,
+    geom: Geometry,
+    pcm_hydrogen_radius: float = 1.1,
+) -> str:
+    """Build the Psi4 PCM section with modified-Bondi cavity radii.
+
+    Psi4's PCMSolver only honours per-atom radii via ``Mode = Explicit`` (the
+    block-level ``Mode = Atoms`` override is silently dropped in the embedded
+    host integration), so we emit the full sphere list ourselves: one sphere per
+    atom at its coordinates with radius ``scaling * modified_Bondi``, except
+    hydrogen uses ``pcm_hydrogen_radius`` (default 1.10).  Explicit mode applies
+    no scaling, so the radii are pre-scaled.
+
+    The spheres are pinned to ``geom``'s coordinates, which is correct for a
+    fixed-geometry ``single_point`` (the input frame is preserved by
+    ``no_reorient``/``no_com``).  Psi4 has no analytical PCM gradients, so
+    optimisation/frequencies in implicit solvent are unsupported regardless.
+    """
+    spheres = []
+    for sym, (x, y, z) in zip(geom.symbols, geom.coords, strict=True):
+        if sym == "H":
+            base = pcm_hydrogen_radius
+        else:
+            try:
+                base = _MODIFIED_BONDI_RADII[sym]
+            except KeyError:
+                raise ValueError(
+                    f"No modified-Bondi radius for element {sym!r}; add it to "
+                    "_MODIFIED_BONDI_RADII (must match pyscf modified_Bondi)."
+                ) from None
+        radius = base * _PCM_RADII_SCALING
+        spheres.append(f"      {x:.10f}, {y:.10f}, {z:.10f}, {radius:.6f}")
+    lines = [
+        "pcm = {",
+        "  Units = Angstrom",
+        "  Medium {",
+        f"    SolverType = {solvent_model}",
+        f"    Solvent = {_psi4_solvent_name(solvent)}",
+        "  }",
+        "  Cavity {",
+        "    Type = GePol",
+        "    Area = 0.1",
+        "    Mode = Explicit",
+        "    Spheres = [",
+        ",\n".join(spheres),
+        "    ]",
+        "  }",
+        "}",
+    ]
+    return "\n".join(lines)
 
 
 def single_point(
@@ -112,6 +266,7 @@ def single_point(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
 ) -> float:
     """Run a single-point DFT energy calculation.
@@ -131,7 +286,7 @@ set {{
 }}
 """
     if solvent_model is not None and solvent is not None:
-        input_text += "\n" + _pcm_block(solvent_model, solvent) + "\n"
+        input_text += "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius) + "\n"
 
     input_text += _bse_basis_block(basis, geom)
 
@@ -151,6 +306,7 @@ def optimize(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
 ) -> tuple[Geometry, float, bool]:
     """Run DFT geometry optimization.
@@ -178,7 +334,7 @@ set {{
 }}
 """
     if solvent_model is not None and solvent is not None:
-        input_text += "\n" + _pcm_block(solvent_model, solvent) + "\n"
+        input_text += "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius) + "\n"
 
     input_text += _bse_basis_block(basis, geom)
 
@@ -213,6 +369,7 @@ def frequencies(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
 ) -> list[float]:
     """Compute harmonic vibrational frequencies.
@@ -232,7 +389,7 @@ set {{
 }}
 """
     if solvent_model is not None and solvent is not None:
-        input_text += "\n" + _pcm_block(solvent_model, solvent) + "\n"
+        input_text += "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius) + "\n"
 
     input_text += _bse_basis_block(basis, geom)
 

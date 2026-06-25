@@ -82,6 +82,7 @@ class RefinementConfig:
     solvent_model: str | None = None
     solvent: str | None = None  # e.g. "water" — required if solvent_model is set
     ewin: float = 10.0  # energy window (kcal/mol) for filtering after refinement
+    pcm_hydrogen_radius: float = 1.1  # PCM cavity radius (Angstrom) for hydrogen
 
 
 @dataclass
@@ -92,6 +93,7 @@ class ScoringConfig:
     solvent: str | None = None
     ewin: float = 10.0
     rrho_level: str = "refinement"  # "sampling", "refinement", or "scoring"
+    pcm_hydrogen_radius: float = 1.1  # PCM cavity radius (Angstrom) for hydrogen
 
 
 @dataclass
@@ -177,6 +179,7 @@ def load_config(path: Path) -> PkaConfig:
         solvent_model=ref_solvent_model,
         solvent=ref_solvent,
         ewin=ref_raw.get("ewin", 10.0),
+        pcm_hydrogen_radius=ref_raw.get("pcm_hydrogen_radius", 1.1),
     )
 
     # [scoring] — optional, driver-specific defaults applied
@@ -194,6 +197,7 @@ def load_config(path: Path) -> PkaConfig:
         solvent=score_solvent,
         ewin=score_raw.get("ewin", 10.0),
         rrho_level=score_raw.get("rrho_level", "refinement"),
+        pcm_hydrogen_radius=score_raw.get("pcm_hydrogen_radius", 1.1),
     )
     if scoring.rrho_level not in ("sampling", "refinement", "scoring"):
         raise ValueError(

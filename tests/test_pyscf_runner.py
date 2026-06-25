@@ -7,13 +7,15 @@ import pytest
 from pyscf import dft, gto
 from pyscf.dft import libxc
 
-# Import triggers D4 composite registration
+# Import triggers D4 composite registration and the PCM ECP-cavity patch
 from qm_pka.pyscf_runner import (
     _D4_COMPOSITES,
     _HESSIAN_FALLBACK,
+    _build_mf,
     _resolve_basis,
     _resolve_method,
 )
+from qm_pka.types import Geometry
 
 
 # ---------------------------------------------------------------------------
@@ -58,18 +60,103 @@ class TestResolveMethod:
 # ---------------------------------------------------------------------------
 class TestResolveBasis:
     def test_vdzp_loaded_from_bse(self) -> None:
-        result = _resolve_basis("vDZP", ["H", "O"])
-        assert isinstance(result, dict)
-        assert "H" in result
-        assert "O" in result
+        basis, _ecp = _resolve_basis("vDZP", ["H", "O"])
+        assert isinstance(basis, dict)
+        assert "H" in basis
+        assert "O" in basis
+
+    def test_vdzp_ecp_loaded_for_core_elements(self) -> None:
+        # vDZP is ECP-designed: oxygen carries a core ECP, hydrogen does not.
+        _basis, ecp = _resolve_basis("vDZP", ["H", "O"])
+        assert ecp is not None
+        assert "O" in ecp
+        assert "H" not in ecp
 
     def test_vdzp_case_insensitive(self) -> None:
-        result = _resolve_basis("vdzp", ["C", "H"])
-        assert isinstance(result, dict)
+        basis, _ecp = _resolve_basis("vdzp", ["C", "H"])
+        assert isinstance(basis, dict)
 
     def test_normal_basis_passes_through(self) -> None:
-        result = _resolve_basis("def2-svp", ["H", "O"])
-        assert result == "def2-svp"
+        basis, ecp = _resolve_basis("def2-svp", ["H", "O"])
+        assert basis == "def2-svp"
+        assert ecp is None
+
+    def test_def2_no_ecp_for_light_elements(self) -> None:
+        # def2 is all-electron through Z=36; no ECP for an organic element set.
+        _basis, ecp = _resolve_basis("def2-QZVPPD", ["C", "H", "O", "Br"])
+        assert ecp is None
+
+    def test_def2_ecp_for_heavy_elements(self) -> None:
+        # Z >= 37 (here iodine) needs the def2-ECP, applied by basis name.
+        basis, ecp = _resolve_basis("def2-QZVPPD", ["I", "H"])
+        assert ecp == {"I": "def2-QZVPPD"}
+        assert basis == "def2-QZVPPD"
+
+
+# ---------------------------------------------------------------------------
+# PCM cavity correction for ECP atoms (monkeypatch of pyscf.solvent.pcm)
+# ---------------------------------------------------------------------------
+class TestPCMECPCavity:
+    """Importing pyscf_runner patches ``pcm.gen_surface`` so the solvent cavity
+    switching radii use the true nuclear charge rather than the ECP-reduced
+    ``mol.atom_charges()``."""
+
+    def _cavity_npts(self, basis: str) -> int:
+        geom = Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array([[0.0, 0.0, 0.1173], [0.0, 0.7572, -0.4692], [0.0, -0.7572, -0.4692]]),
+        )
+        _mol, mf = _build_mf(geom, 0, "pbe", basis, "SSVPE", "water", 1)
+        mf.with_solvent.build()
+        return int(mf.with_solvent.surface["grid_coords"].shape[0])
+
+    def test_patch_installed(self) -> None:
+        import pyscf.solvent.pcm as pcm
+
+        assert getattr(pcm.gen_surface, "_ecp_cavity_patched", False)
+
+    def test_ecp_basis_matches_all_electron_cavity(self) -> None:
+        # Same geometry: an ECP basis (vDZP) must build the SAME PCM cavity as an
+        # all-electron basis (def2-SVP), since the switching radii use true
+        # nuclear charge in both.  Without the patch the vDZP (ECP) cavity differs
+        # (oxygen's switching radius collapses to carbon's), changing the count.
+        assert self._cavity_npts("vDZP") == self._cavity_npts("def2-svp")
+
+    # Upstream-drift tripwire: the monkeypatch wraps an internal PySCF function
+    # and relies on it reading mol.atom_charges() for the switching radii.  Pin
+    # the source so any change to that function fails here until someone
+    # re-reviews _patch_pcm_ecp_cavity, then re-blesses the values below.
+    _PINNED_PYSCF = "2.11.0"
+    _PINNED_HASH = "c3664f90b7f761deb85cef6bd5b339965bbd911c461f59786c453606c343e57c"
+
+    def test_upstream_gen_surface_unchanged(self) -> None:
+        import hashlib
+        import inspect
+
+        import pyscf
+        import pyscf.solvent.pcm as pcm
+
+        original = getattr(pcm.gen_surface, "_ecp_cavity_original", None)
+        assert original is not None, "ECP cavity patch not applied"
+        try:
+            src = inspect.getsource(original)
+        except (OSError, TypeError):
+            pytest.skip("pyscf.solvent.pcm.gen_surface source unavailable")
+
+        # Actionable invariant: the exact behaviour the patch corrects.
+        assert "mol.atom_charges()" in src, (
+            "pyscf gen_surface no longer reads mol.atom_charges() for the cavity "
+            "radii — the ECP cavity patch may be obsolete or broken. Re-review "
+            "qm_pka.pyscf_runner._patch_pcm_ecp_cavity."
+        )
+
+        actual = hashlib.sha256(src.encode()).hexdigest()
+        assert actual == self._PINNED_HASH, (
+            "pyscf.solvent.pcm.gen_surface source changed "
+            f"(pinned pyscf {self._PINNED_PYSCF}, running {pyscf.__version__}). "
+            "Re-review qm_pka.pyscf_runner._patch_pcm_ecp_cavity against the new "
+            f"implementation, then update _PINNED_PYSCF/_PINNED_HASH to {actual!r}."
+        )
 
 
 # ---------------------------------------------------------------------------

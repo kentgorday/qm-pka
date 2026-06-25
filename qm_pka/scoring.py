@@ -37,6 +37,7 @@ def score(
     solvent_model: str | None = None,
     solvent: str | None = None,
     ewin: float = 10.0,
+    pcm_hydrogen_radius: float = 1.1,
     compute_rrho: bool = False,
     threads: int = 1,
 ) -> Ensemble:
@@ -70,6 +71,7 @@ def score(
                             basis,
                             solvent_model,
                             solvent,
+                            pcm_hydrogen_radius=pcm_hydrogen_radius,
                             threads=threads,
                         )
                         gas = driver.single_point(
@@ -91,6 +93,7 @@ def score(
                             basis,
                             solvent_model,
                             solvent,
+                            pcm_hydrogen_radius=pcm_hydrogen_radius,
                             threads=threads,
                         )
                         conf.rrho_correction = quasi_rrho_free_energy(freqs)

@@ -2,7 +2,8 @@
 
 Provides geometry optimization, single-point energy, and frequency
 calculations. Uses an (99, 590) integration grid for all DFT calculations
-and a (50, 194) NLC grid for VV10-containing functionals.
+and a (50, 194) NLC grid for VV10-containing functionals, with NWChem
+region-based grid pruning.
 
 Composite methods based on wB97X-V (wB97X-D4, wB97X-D4rev, wB97X-3c) are
 registered with PySCF's dispersion dispatch so that the correct D4 parameters
@@ -84,6 +85,54 @@ def _register_d4_composites() -> None:
 _register_d4_composites()
 
 
+def _patch_pcm_ecp_cavity() -> None:
+    """Correct PySCF's PCM cavity radii lookup for ECP atoms.
+
+    ``pyscf.solvent.pcm.gen_surface`` indexes the inter-atomic switching-function
+    vdW radii by ``mol.atom_charges()``, which an ECP *reduces* (e.g. oxygen
+    8 -> 6).  ECP atoms therefore get the wrong element's radius (oxygen gets
+    carbon's 1.70 A instead of 1.52).  The per-sphere radius already uses the
+    true nuclear charge and is correct; only the switching radii are affected.
+
+    Because vDZP places an ECP on every non-H atom, this corrupts the solvent
+    cavity of every heavy atom in every PySCF implicit-solvent calculation
+    (shifting solvation energies by ~0.26 kcal/mol on water).  We wrap
+    ``gen_surface`` to expose true nuclear charges for the duration of the call.
+    Every caller (PCM and SMD) reaches the function via ``pcm.gen_surface``, so a
+    single reassignment covers them all.  gpu4pyscf has its own, already-correct
+    ``gen_surface`` and is untouched.  This is the interim fix for an upstream
+    PySCF bug (its line should use ``gto.charge`` like the per-sphere loop does).
+    """
+    import numpy
+    import pyscf.solvent.pcm as pcm
+    from pyscf import gto
+
+    if getattr(pcm.gen_surface, "_ecp_cavity_patched", False):
+        return  # idempotent: never double-wrap
+
+    _orig_gen_surface = pcm.gen_surface
+
+    def gen_surface(mol: Any, *args: Any, **kwargs: Any) -> Any:
+        true_z = numpy.array([gto.charge(mol.atom_symbol(ia)) for ia in range(mol.natm)])
+        had_attr = "atom_charges" in mol.__dict__
+        saved = mol.__dict__.get("atom_charges")
+        mol.atom_charges = lambda: true_z  # shadow the ECP-reduced method
+        try:
+            return _orig_gen_surface(mol, *args, **kwargs)
+        finally:
+            if had_attr:
+                mol.atom_charges = saved
+            else:
+                del mol.atom_charges
+
+    gen_surface._ecp_cavity_patched = True  # type: ignore[attr-defined]
+    gen_surface._ecp_cavity_original = _orig_gen_surface  # type: ignore[attr-defined]
+    pcm.gen_surface = gen_surface
+
+
+_patch_pcm_ecp_cavity()
+
+
 def _resolve_method(method: str) -> tuple[str, str | None]:
     """Resolve a user-facing method name to a PySCF xc string.
 
@@ -100,33 +149,65 @@ def _resolve_method(method: str) -> tuple[str, str | None]:
     return method, None
 
 
-def _resolve_basis(basis: str, elements: list[str]) -> str | dict[str, Any]:
+def _resolve_basis(
+    basis: str, elements: list[str]
+) -> tuple[str | dict[str, Any], dict[str, Any] | None]:
     """Resolve a basis set name, loading from basis-set-exchange if needed.
 
-    PySCF doesn't include vDZP natively; we load it from BSE.
+    PySCF doesn't include vDZP natively; we load it from BSE.  vDZP is an
+    ECP-designed basis (heavier atoms have no core functions), so we must also
+    load its per-element effective core potentials and apply them via
+    ``mol.ecp`` — without them PySCF runs an all-electron SCF on a core-
+    incapable basis and the energy is meaningless.
+
+    Returns ``(basis, ecp)`` where ``ecp`` is ``None`` for built-in bases or a
+    ``{element: ecp_data}`` dict for vDZP (elements with no core, e.g. H, are
+    omitted).
     """
     if basis.lower() == "vdzp":
+        import os
+        import tempfile
+
         import basis_set_exchange as bse
         from pyscf.gto.basis import parse_nwchem
 
         nwchem_str = bse.get_basis("Grimme vDZP", fmt="nwchem")
-        import tempfile
 
         with tempfile.NamedTemporaryFile(mode="w", suffix=".nw", delete=False) as f:
             f.write(nwchem_str)
             tmppath = f.name
 
-        import os
-
         try:
             unique_elements = sorted(set(elements))
             basis_dict: dict[str, Any] = {}
+            ecp_dict: dict[str, Any] = {}
             for elem in unique_elements:
                 basis_dict[elem] = parse_nwchem.load(tmppath, elem)
-            return basis_dict
+                # vDZP replaces the core of heavier atoms with an ECP; light
+                # atoms (H, He) have none, for which load_ecp returns empty.
+                try:
+                    ecp_data = parse_nwchem.load_ecp(tmppath, elem)
+                except Exception:
+                    ecp_data = None
+                if ecp_data:
+                    ecp_dict[elem] = ecp_data
+            return basis_dict, (ecp_dict or None)
         finally:
             os.unlink(tmppath)
-    return basis
+
+    # def2-family bases use effective core potentials for Z >= 37 (Rb onward).
+    # PySCF does NOT auto-apply them from mol.basis, so an all-electron SCF on
+    # a core-incapable basis would result (the same failure mode as vDZP).
+    # Request the matching def2-ECP by name, but only for the heavy elements
+    # that actually define one, so light-element calculations are untouched.
+    if basis.lower().startswith("def2"):
+        from pyscf import gto
+
+        ecp_dict = {elem: basis for elem in sorted(set(elements)) if gto.charge(elem) >= 37}
+        if ecp_dict:
+            return basis, ecp_dict
+
+    return basis, None
 
 
 def _build_mf(
@@ -136,6 +217,7 @@ def _build_mf(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
 ) -> tuple[Any, Any]:
     """Build a PySCF Mole and mean-field object with the requested settings.
@@ -147,7 +229,7 @@ def _build_mf(
     lib.num_threads(threads)
 
     xc_string, _d4_param = _resolve_method(method)
-    resolved_basis = _resolve_basis(basis, list(geom.symbols))
+    resolved_basis, resolved_ecp = _resolve_basis(basis, list(geom.symbols))
 
     mol = gto.Mole()
     mol.atom = [
@@ -155,6 +237,8 @@ def _build_mf(
         for sym, coord in zip(geom.symbols, geom.coords, strict=True)
     ]
     mol.basis = resolved_basis
+    if resolved_ecp is not None:
+        mol.ecp = resolved_ecp
     mol.charge = charge
     mol.spin = geom.n_electrons(charge) % 2  # 0 for singlet, 1 for doublet
     mol.verbose = 3
@@ -169,9 +253,11 @@ def _build_mf(
     # was rewritten by _resolve_method to the registered internal name.
     mf.xc = xc_string
 
-    # Integration grid: (99, 590) for all DFT calculations
+    # Integration grid: (99, 590) for all DFT calculations, with NWChem
+    # region-based pruning (PySCF's default scheme; the closest analog to
+    # Psi4's ROBUST used in the Psi4 backend).
     mf.grids.atom_grid = (99, 590)
-    mf.grids.prune = None
+    mf.grids.prune = dft.gen_grid.nwchem_prune
 
     # VV10 NLC grid for functionals with active nonlocal correlation.
     # D4 composites disable VV10 (nlc=False in the registration), so
@@ -179,7 +265,7 @@ def _build_mf(
     method_lower = method.lower().replace("_", "-")
     if method_lower in _VV10_XC:
         mf.nlcgrids.atom_grid = (50, 194)
-        mf.nlcgrids.prune = None
+        mf.nlcgrids.prune = dft.gen_grid.nwchem_prune
 
     # Implicit solvent.  Prefer the analytical PCM (with proper gradients)
     # over the experimental ddPCM/ddCOSMO domain-decomposed variants.
@@ -202,6 +288,17 @@ def _build_mf(
             mf = pyscf_solvent.PCM(mf)
             mf.with_solvent.method = pcm_method_map[solvent_model_upper]
             mf.with_solvent.eps = _solvent_dielectric(solvent)
+            # Cavity radii: PySCF's default is modified_Bondi (H=1.10); override
+            # the hydrogen radius with the user value.  radii_table holds the
+            # final (already vdw_scale-scaled) radii, so replicate that formula.
+            # With pcm_hydrogen_radius=1.10 this reproduces the default exactly.
+            import pyscf.solvent.pcm as _pcm
+            from pyscf.data import radii as _radii
+
+            ws = mf.with_solvent
+            rad = _pcm.modified_Bondi.copy()
+            rad[1] = pcm_hydrogen_radius / _radii.BOHR
+            ws.radii_table = ws.vdw_scale * rad + ws.r_probe / _radii.BOHR
         elif solvent_model_upper == "DDPCM":
             mf = pyscf_solvent.ddPCM(mf)
             mf.with_solvent.eps = _solvent_dielectric(solvent)
@@ -247,13 +344,16 @@ def single_point(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
 ) -> float:
     """Run a single-point DFT energy calculation.
 
     Returns the total energy in Hartree.
     """
-    _mol, mf = _build_mf(geom, charge, method, basis, solvent_model, solvent, threads)
+    _mol, mf = _build_mf(
+        geom, charge, method, basis, solvent_model, solvent, pcm_hydrogen_radius, threads
+    )
     return _run_scf_robust(mf)
 
 
@@ -264,6 +364,7 @@ def optimize(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
 ) -> tuple[Geometry, float, bool]:
     """Run DFT geometry optimization.
@@ -281,7 +382,14 @@ def optimize(
 
     def _run(start_geom: Geometry, coordsys: str, maxsteps: int) -> tuple[Geometry, float, bool]:
         _mol, mf_local = _build_mf(
-            start_geom, charge, method, basis, solvent_model, solvent, threads
+            start_geom,
+            charge,
+            method,
+            basis,
+            solvent_model,
+            solvent,
+            pcm_hydrogen_radius,
+            threads,
         )
         _run_scf_robust(mf_local)
         with tempfile.TemporaryDirectory(prefix="pyscf_opt_") as tmpdir:
@@ -313,6 +421,7 @@ def frequencies(
     basis: str,
     solvent_model: str | None = None,
     solvent: str | None = None,
+    pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
 ) -> list[float]:
     """Compute harmonic vibrational frequencies.
@@ -331,7 +440,9 @@ def frequencies(
             f"Hessian: falling up from {method} to {hess_method} for analytical second derivatives"
         )
 
-    mol, mf = _build_mf(geom, charge, hess_method, basis, solvent_model, solvent, threads)
+    mol, mf = _build_mf(
+        geom, charge, hess_method, basis, solvent_model, solvent, pcm_hydrogen_radius, threads
+    )
     _run_scf_robust(mf)
 
     hessian = mf.Hessian().kernel()

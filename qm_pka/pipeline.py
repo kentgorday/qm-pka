@@ -64,6 +64,7 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
         solvent_model=ref.solvent_model,
         solvent=ref.solvent,
         ewin=ref.ewin,
+        pcm_hydrogen_radius=ref.pcm_hydrogen_radius,
         compute_rrho=config.scoring.rrho_level == "refinement",
         threads=threads,
     )
@@ -85,6 +86,7 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
         solvent_model=sc.solvent_model,
         solvent=sc.solvent,
         ewin=sc.ewin,
+        pcm_hydrogen_radius=sc.pcm_hydrogen_radius,
         compute_rrho=sc.rrho_level == "scoring",
         threads=threads,
     )
