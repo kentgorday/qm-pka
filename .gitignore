@@ -20,6 +20,13 @@ train_set/
 *_output/
 timer.dat
 
+# PCMSolver scratch files (written to the cwd by the Psi4 backend when using PCM)
+@pcmsolver.*
+PEDRA.OUT*
+cavity.off*
+cavity.npz
+pcmsolver.*.inp*
+
 # Editor / OS
 .DS_Store
 .idea/
