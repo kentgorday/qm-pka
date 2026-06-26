@@ -168,12 +168,12 @@ Pre-commit hook runs ruff. Mypy is strict.
 
 The set of things that look weird and aren't. Read before "fixing":
 
-- **CREST is always invoked with `-newversion`.** This forces CREST to use
-  its internal tblite backend instead of the standalone xtb binary. The
-  conda-pinned `gcp-correction` requires `mctc-lib < 0.4`, which forces
-  `xtb` to a build with a Fortran format-string bug
-  ([xtb#1332](https://github.com/grimme-lab/xtb/issues/1332)). Removing the
-  flag will produce mysterious xtb crashes.
+- **`xtb` is floored at `>=6.7.1` in `pixi.toml`.** `gcp-correction` 2.3.2
+  (build 2) requires `mctc-lib >= 0.5.1`; without the floor the solver falls
+  back to the ancient `xtb` 6.4.1 (the last release with no `mctc-lib`
+  dependency) instead of a build rebuilt against `mctc-lib` 0.5.x. xtb 6.7.1
+  build >=4 also fixes a Fortran format-string bug
+  ([xtb#1332](https://github.com/grimme-lab/xtb/issues/1332)).
 - **wB97X-D4 / wB97X-D4rev / wB97X-3c are re-registered with PySCF**
   (`pyscf_runner.py::_register_d4_composites`). PySCF's native `wb97x-d4`
   string maps to libxc 464 (the original 2008 wB97X) plus D4. The actual
