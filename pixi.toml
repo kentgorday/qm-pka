@@ -14,11 +14,13 @@ check = { depends-on = ["lint", "format-check", "typecheck"] }
 [dependencies]
 crest = ">=3.0.2,<4"
 gcp-correction = ">=2.3.2,<3"
+# Floor xtb at 6.7.1. gcp-correction 2.3.2 build 2 requires mctc-lib >=0.5.1; without
+# this floor the solver falls back to xtb 6.4.1 (the last release with no mctc-lib
+# dependency) instead of the newer builds rebuilt against mctc-lib 0.5.x. xtb 6.7.1
+# build >=4 also fixes the build-2 Fortran format-string bug (grimme-lab/xtb#1332).
+xtb = ">=6.7.1"
 psi4 = ">=1.10,<2"
 rdkit = ">=2024.03,<2026"
-# NOTE: gcp-correction pins mctc-lib <0.4, forcing xtb to an old build with a Fortran
-# format string bug. We pass -newversion to all CREST commands so it uses its internal
-# tblite backend instead of the standalone xtb binary, avoiding the bug entirely.
 pytest = ">=9.0.3,<10"
 mypy = ">=1.20.0,<2"
 # DFT backends: Psi4 (subprocess) and PySCF (Python library).
