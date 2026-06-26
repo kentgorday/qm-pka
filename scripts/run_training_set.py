@@ -56,11 +56,11 @@ ewin = 10.0
 
 [refinement]
 {refinement_solvent}ewin = 10.0
+rrho_method = "xtb"
 
 [scoring]
 solvent = "water"
 ewin = 10.0
-rrho_level = "refinement"
 
 [compute]
 driver = "{driver}"

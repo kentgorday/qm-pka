@@ -250,24 +250,50 @@ class TestSamplingConfig:
             )
 
 
-class TestRRHOLevel:
-    def test_default_is_refinement(self, tmp_toml: Callable[[str], Path]) -> None:
+class TestRRHOMethod:
+    def test_default_is_xtb(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""
             [molecule]
             smiles = "CCO"
         """)
         )
-        assert cfg.scoring.rrho_level == "refinement"
+        assert cfg.refinement.rrho_method == "xtb"
 
-    def test_invalid_rrho_level_raises(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match="Unknown rrho_level"):
+    def test_dft_accepted(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            rrho_method = "dft"
+        """)
+        )
+        assert cfg.refinement.rrho_method == "dft"
+
+    def test_invalid_rrho_method_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="Unknown rrho_method"):
             load_config(
                 tmp_toml("""
                 [molecule]
                 smiles = "CCO"
-                [scoring]
-                rrho_level = "cheap"
+                [refinement]
+                rrho_method = "cheap"
+            """)
+            )
+
+    def test_dft_rrho_psi4_solvent_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="rrho_method = 'dft'"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                rrho_method = "dft"
+                solvent_model = "IEFPCM"
+                solvent = "water"
+                [compute]
+                driver = "psi4"
             """)
             )
 

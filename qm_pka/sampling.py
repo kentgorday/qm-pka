@@ -31,8 +31,9 @@ from qm_pka.rdkit_utils import (
 )
 from qm_pka.stereo import enumerate_and_deduplicate
 from qm_pka.tautomer_dedup import deduplicate_tautomers
+from qm_pka.thermo import quasi_rrho_free_energy
 from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
-from qm_pka.xtb_runner import optimize, single_point
+from qm_pka.xtb_runner import frequencies, optimize, single_point
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,30 @@ def _filter_by_energy_window(conformers: list[Conformer], ewin_kcal: float) -> l
     e_min = min(c.free_energy for c in conformers)
     ewin_hartree = ewin_kcal / HARTREE_TO_KCAL
     return [c for c in conformers if (c.free_energy - e_min) <= ewin_hartree]
+
+
+def _add_rrho_and_filter(
+    conformers: list[Conformer],
+    charge: int,
+    solvent: str | None,
+    ewin_kcal: float,
+    threads: int | None = None,
+) -> list[Conformer]:
+    """Set the xTB quasi-RRHO correction on each conformer, then filter by the
+    energy window using the resulting free energy.
+
+    A plain numerical Hessian (``--hess``) is used: sampling geometries are xTB
+    minima (CREST-optimized), so no biasing is needed. Conformers whose Hessian
+    fails keep their electronic free energy only, with a warning. This is a
+    cheap pre-filter estimate; refinement recomputes RRHO on the DFT geometry.
+    """
+    for conf in conformers:
+        try:
+            freqs = frequencies(conf.geometry, charge=charge, solvent=solvent, threads=threads)
+            conf.rrho_correction = quasi_rrho_free_energy(freqs)
+        except Exception as e:
+            log.warning(f"    xTB RRHO failed for a conformer (charge {charge}): {e}")
+    return _filter_by_energy_window(conformers, ewin_kcal)
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +185,7 @@ def run_approach1(
                             solvation_energy=total - gas_phase if solvent is not None else None,
                         )
                     ]
+                conformers = _add_rrho_and_filter(conformers, q, solvent, ewin, threads)
                 microstates.append(
                     Microstate(
                         tautomer_id=smi,
@@ -324,6 +350,7 @@ def _run_crest_pipeline_for_stereoisomer(
                             solvation_energy=total - gas_phase if solvent is not None else None,
                         )
                     ]
+                conformers = _add_rrho_and_filter(conformers, q, solvent, ewin, threads)
                 microstates.append(
                     Microstate(
                         tautomer_id=fp,

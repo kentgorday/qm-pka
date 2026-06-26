@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from types import ModuleType
 
+from qm_pka import xtb_runner
 from qm_pka.ensemble import filter_charge_state_by_energy
 from qm_pka.thermo import quasi_rrho_free_energy
 from qm_pka.types import Ensemble
@@ -38,7 +39,8 @@ def refine(
     solvent: str | None = None,
     ewin: float = 10.0,
     pcm_hydrogen_radius: float = 1.1,
-    compute_rrho: bool = False,
+    rrho_method: str = "xtb",
+    xtb_rrho_solvent: str | None = None,
     threads: int = 1,
 ) -> Ensemble:
     """Refine all conformers via DFT geometry optimization.
@@ -47,8 +49,12 @@ def refine(
       1. Run DFT geometry optimization (with solvent if configured).
       2. If solvent is used, run a gas-phase single-point on the optimized
          geometry to decompose into electronic and solvation components.
-      3. If compute_rrho is True, compute vibrational frequencies and set
-         the quasi-RRHO free energy correction.
+      3. Recompute the quasi-RRHO vibrational free-energy correction on the
+         DFT geometry. ``rrho_method="xtb"`` uses a GFN2 single-point (biased)
+         Hessian via ``xtb --bhess`` in implicit solvent (``xtb_rrho_solvent``);
+         ``rrho_method="dft"`` computes the Hessian at the refinement DFT level,
+         matching the refinement solvent. This replaces the cheap xTB RRHO that
+         sampling computed on the xTB geometry.
 
     Conformers whose optimizer ran but did not fully converge are kept
     (with refinement_converged=False) since the last-step geometry is
@@ -98,7 +104,15 @@ def refine(
                         conf.electronic_energy = opt_energy
                         conf.solvation_energy = None
 
-                    if compute_rrho:
+                    if rrho_method == "xtb":
+                        freqs = xtb_runner.frequencies(
+                            opt_geom,
+                            cs.charge,
+                            solvent=xtb_rrho_solvent,
+                            biased=True,
+                            threads=threads,
+                        )
+                    else:  # "dft"
                         freqs = driver.frequencies(
                             opt_geom,
                             cs.charge,
@@ -109,7 +123,7 @@ def refine(
                             pcm_hydrogen_radius=pcm_hydrogen_radius,
                             threads=threads,
                         )
-                        conf.rrho_correction = quasi_rrho_free_energy(freqs)
+                    conf.rrho_correction = quasi_rrho_free_energy(freqs)
 
                     surviving.append(conf)
                 except Exception as e:
