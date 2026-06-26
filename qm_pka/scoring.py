@@ -1,7 +1,8 @@
 """Scoring stage: high-level DFT single-point energy evaluation.
 
-Replaces refinement-level energies with higher-level DFT energies and
-optionally computes quasi-RRHO vibrational free energy corrections.
+Replaces refinement-level energies with higher-level DFT energies. The
+quasi-RRHO vibrational free-energy correction is carried over unchanged from
+refinement (scoring never recomputes frequencies).
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ import logging
 from types import ModuleType
 
 from qm_pka.ensemble import filter_charge_state_by_energy
-from qm_pka.thermo import quasi_rrho_free_energy
 from qm_pka.types import Ensemble
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,6 @@ def score(
     solvent: str | None = None,
     ewin: float = 10.0,
     pcm_hydrogen_radius: float = 1.1,
-    compute_rrho: bool = False,
     threads: int = 1,
 ) -> Ensemble:
     """Score all conformers via high-level DFT single-point energy.
@@ -47,8 +46,9 @@ def score(
       1. Run DFT single-point (with solvent if configured).
       2. If solvent is used, run a gas-phase single-point to decompose
          into electronic and solvation components.
-      3. If compute_rrho is True, compute vibrational frequencies and set
-         the quasi-RRHO free energy correction.
+
+    Any quasi-RRHO correction set during refinement is left untouched and
+    contributes to the conformer free energy used for filtering and weighting.
 
     Conformers that fail are dropped with a warning. After processing,
     conformers within each charge state are filtered by the energy window.
@@ -84,19 +84,6 @@ def score(
                             conf.geometry, cs.charge, method, basis, threads=threads
                         )
                         conf.solvation_energy = None
-
-                    if compute_rrho:
-                        freqs = driver.frequencies(
-                            conf.geometry,
-                            cs.charge,
-                            method,
-                            basis,
-                            solvent_model,
-                            solvent,
-                            pcm_hydrogen_radius=pcm_hydrogen_radius,
-                            threads=threads,
-                        )
-                        conf.rrho_correction = quasi_rrho_free_energy(freqs)
 
                     surviving.append(conf)
                 except Exception as e:

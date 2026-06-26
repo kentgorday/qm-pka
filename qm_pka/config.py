@@ -3,8 +3,8 @@
 Reads a single TOML file that configures:
   [molecule]   — input SMILES and charge range
   [sampling]   — CREST-based conformer/tautomer/protonation sampling
-  [refinement] — geometry optimization with cheap DFT
-  [scoring]    — single-point energy + RRHO free energy with expensive DFT
+  [refinement] — geometry optimization with cheap DFT + quasi-RRHO correction
+  [scoring]    — single-point energy with expensive DFT
   [compute]    — driver (psi4/pyscf), threads, output directory
 """
 
@@ -83,6 +83,10 @@ class RefinementConfig:
     solvent: str | None = None  # e.g. "water" — required if solvent_model is set
     ewin: float = 10.0  # energy window (kcal/mol) for filtering after refinement
     pcm_hydrogen_radius: float = 1.1  # PCM cavity radius (Angstrom) for hydrogen
+    # quasi-RRHO recompute on the DFT geometry: "xtb" (GFN2 single-point/biased
+    # Hessian via xtb --bhess, always implicit solvent) or "dft" (Hessian at the
+    # refinement DFT level, matching the refinement solvent choice).
+    rrho_method: str = "xtb"
 
 
 @dataclass
@@ -92,7 +96,6 @@ class ScoringConfig:
     solvent_model: str | None = None
     solvent: str | None = None
     ewin: float = 10.0
-    rrho_level: str = "refinement"  # "sampling", "refinement", or "scoring"
     pcm_hydrogen_radius: float = 1.1  # PCM cavity radius (Angstrom) for hydrogen
 
 
@@ -180,7 +183,12 @@ def load_config(path: Path) -> PkaConfig:
         solvent=ref_solvent,
         ewin=ref_raw.get("ewin", 10.0),
         pcm_hydrogen_radius=ref_raw.get("pcm_hydrogen_radius", 1.1),
+        rrho_method=ref_raw.get("rrho_method", "xtb"),
     )
+    if refinement.rrho_method not in ("xtb", "dft"):
+        raise ValueError(
+            f"Unknown rrho_method: {refinement.rrho_method!r} (must be 'xtb' or 'dft')"
+        )
 
     # [scoring] — optional, driver-specific defaults applied
     score_raw = raw.get("scoring", {})
@@ -196,14 +204,8 @@ def load_config(path: Path) -> PkaConfig:
         solvent_model=score_solvent_model,
         solvent=score_solvent,
         ewin=score_raw.get("ewin", 10.0),
-        rrho_level=score_raw.get("rrho_level", "refinement"),
         pcm_hydrogen_radius=score_raw.get("pcm_hydrogen_radius", 1.1),
     )
-    if scoring.rrho_level not in ("sampling", "refinement", "scoring"):
-        raise ValueError(
-            f"Unknown rrho_level: {scoring.rrho_level!r} "
-            f"(must be 'sampling', 'refinement', or 'scoring')"
-        )
 
     # Validation: solvent_model requires solvent
     if refinement.solvent_model is not None and refinement.solvent is None:
@@ -223,6 +225,21 @@ def load_config(path: Path) -> PkaConfig:
             "Psi4 has no analytical gradients for PCM solvent models. "
             "Geometry optimization with implicit solvent will be extremely slow. "
             "Consider using pyscf as the driver, or removing solvent_model from [refinement]."
+        )
+
+    # Error: DFT-level RRHO in implicit solvent requires PCM second derivatives,
+    # which Psi4 lacks entirely (no analytical PCM gradients). Use rrho_method =
+    # "xtb" (ALPB Hessian) or drop the refinement solvent.
+    if (
+        refinement.rrho_method == "dft"
+        and compute.driver == "psi4"
+        and refinement.solvent_model is not None
+    ):
+        raise ValueError(
+            "[refinement] rrho_method = 'dft' with an implicit solvent is not "
+            "supported on the psi4 driver: Psi4 has no analytical PCM Hessians. "
+            "Use rrho_method = 'xtb', remove solvent_model from [refinement], or "
+            "switch to the pyscf driver."
         )
 
     return PkaConfig(

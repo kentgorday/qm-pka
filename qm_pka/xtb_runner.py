@@ -1,6 +1,12 @@
-"""Wrapper around CREST for xTB geometry optimization and single-point energy.
+"""Wrappers around CREST/xtb for xTB geometry optimization, single-point
+energy, and quasi-RRHO vibrational free-energy corrections.
 
-CREST 3.x evaluates GFN2-xTB through its in-process tblite backend.
+CREST 3.x evaluates GFN2-xTB through its in-process tblite backend, used here
+for optimization and single points. Hessians go through the standalone ``xtb``
+binary instead: CREST's calculator does not implement the biased Hessian
+("bhess not implemented for calculator routines") and the ``tblite`` CLI
+cannot compute Hessians at all, so ``xtb`` is the only tool that provides both
+``--hess`` and ``--bhess``.
 """
 
 from __future__ import annotations
@@ -126,6 +132,93 @@ def single_point(
             import shutil
 
             shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def frequencies(
+    geom: Geometry,
+    charge: int = 0,
+    gfn: int = 2,
+    solvent: str | None = None,
+    biased: bool = False,
+    threads: int | None = None,
+    work_dir: Path | None = None,
+) -> list[float]:
+    """Compute harmonic vibrational frequencies via the standalone xtb binary.
+
+    Args:
+        biased: If True, use ``--bhess`` (Spicher-Grimme single-point Hessian),
+            appropriate for geometries that are *not* stationary points on the
+            xTB surface (e.g. DFT-optimized geometries during refinement). If
+            False, use the plain numerical Hessian ``--hess`` for xTB minima
+            (e.g. CREST-optimized geometries during sampling).
+        solvent: ALPB implicit-solvent name (e.g. "water"); xTB RRHO is always
+            computed in implicit solvent in this workflow.
+
+    Returns frequencies in cm**-1 (the 3N-6 vibrational modes, with translation
+    and rotation already projected out by xtb; imaginary modes as negatives).
+    """
+    cleanup = False
+    if work_dir is None:
+        work_dir = Path(tempfile.mkdtemp(prefix="xtb_hess_"))
+        cleanup = True
+
+    try:
+        input_xyz = work_dir / "input.xyz"
+        write_xyz(geom, input_xyz)
+
+        cmd = [
+            "xtb",
+            str(input_xyz),
+            "--bhess" if biased else "--hess",
+            "--gfn",
+            str(gfn),
+            "--chrg",
+            str(charge),
+        ]
+        if solvent is not None:
+            cmd.extend(["--alpb", solvent])
+        if threads is not None:
+            cmd.extend(["--parallel", str(threads)])
+
+        result = subprocess.run(
+            cmd,
+            cwd=work_dir,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"xtb Hessian failed (exit {result.returncode}):\n{result.stderr[-2000:]}"
+            )
+
+        g98 = work_dir / "g98.out"
+        if not g98.exists():
+            raise FileNotFoundError(f"xtb did not produce g98.out in {work_dir}")
+        return _parse_g98_frequencies(g98.read_text())
+
+    finally:
+        if cleanup:
+            import shutil
+
+            shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def _parse_g98_frequencies(text: str) -> list[float]:
+    """Parse vibrational frequencies (cm⁻¹) from xtb's Gaussian-98 output.
+
+    g98.out lists only the real vibrational modes (translation/rotation are
+    already projected out), three per ``Frequencies --`` line.
+    """
+    freqs: list[float] = []
+    prefix = "Frequencies --"
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(prefix):
+            freqs.extend(float(tok) for tok in stripped[len(prefix) :].split())
+    if not freqs:
+        raise RuntimeError("Could not parse any frequencies from xtb g98.out")
+    return freqs
 
 
 def _parse_energy(stdout: str) -> float:

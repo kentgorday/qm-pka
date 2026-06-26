@@ -61,7 +61,8 @@ class Conformer:
         At sampling, computed as (CREST ALPB total) - (gas-phase xTB SP).
         At refinement/scoring, from implicit solvent model (SMD/PCM).
       - rrho_correction: quasi-RRHO vibrational free energy (Hartree).
-        Set after frequency calculation at the configured rrho_level.
+        Set at sampling (xTB --hess on the xTB geometry) and recomputed at
+        refinement on the DFT geometry per the configured rrho_method.
 
     The free_energy property sums all non-None components for Boltzmann
     weighting and partition function calculations.

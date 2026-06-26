@@ -17,16 +17,27 @@ each charge state.
 
 | Stage | What it does | Tool | Sets |
 |---|---|---|---|
-| 1. Sampling | Enumerate tautomers, protonation states, stereoisomers, conformers | CREST + GFN2-xTB (ALPB water) | `electronic_energy`, `solvation_energy` |
-| 2. Refinement | DFT geometry optimization | PySCF or Psi4 | overwrites the above with DFT values; optionally `rrho_correction` |
-| 3. Scoring | High-level DFT single point | PySCF or Psi4 | overwrites electronic/solvation; optionally `rrho_correction` |
+| 1. Sampling | Enumerate tautomers, protonation states, stereoisomers, conformers | CREST + GFN2-xTB (ALPB water) | `electronic_energy`, `solvation_energy`, `rrho_correction` (xTB `--hess`) |
+| 2. Refinement | DFT geometry optimization + RRHO recompute on the DFT geometry | PySCF or Psi4 (+ xtb) | overwrites electronic/solvation with DFT values; recomputes `rrho_correction` |
+| 3. Scoring | High-level DFT single point | PySCF or Psi4 | overwrites electronic/solvation; leaves `rrho_correction` |
 
 After scoring, `assign_weights` populates per-conformer Boltzmann weights and
 the ensemble is serialized to `ensemble.json`.
 
-RRHO (quasi-RRHO vibrational free energy) is computed once, at whichever stage
-`scoring.rrho_level` selects (default `"refinement"`). It is not redundantly
-recomputed.
+RRHO (quasi-RRHO vibrational free energy) is always included. It is first
+computed cheaply at sampling — an xTB Hessian (`xtb --hess`, ALPB water) on the
+xTB geometry, folded into the sampling energy window so filtering ranks by free
+energy. It is then recomputed once on the refined DFT geometry, controlled by
+`refinement.rrho_method`:
+
+- `"xtb"` (default): GFN2 single-point biased Hessian (`xtb --bhess`, ALPB
+  water) — the Spicher–Grimme SPH scheme. Cheap and robust on the non-stationary
+  DFT geometry; recommended.
+- `"dft"`: Hessian at the refinement DFT level, matching the refinement solvent.
+  More expensive and only as good as the backend's analytical Hessians.
+  Unsupported on Psi4 with implicit solvent (no analytical PCM Hessians).
+
+Scoring never recomputes RRHO; the refinement value carries through.
 
 ## Data model
 

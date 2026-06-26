@@ -18,13 +18,19 @@ log = logging.getLogger(__name__)
 def run_pipeline(config: PkaConfig) -> Ensemble:
     """Run the full three-stage pKa prediction pipeline.
 
-    Stage 1 (Sampling): CREST-based conformer/tautomer/protonation enumeration.
-    Stage 2 (Refinement): DFT geometry optimization.
-    Stage 3 (Scoring): DFT single-point energy + optional RRHO.
+    Stage 1 (Sampling): CREST-based conformer/tautomer/protonation enumeration,
+        with an xTB-level RRHO correction folded into the energy filter.
+    Stage 2 (Refinement): DFT geometry optimization + RRHO recompute on the DFT
+        geometry (xtb --bhess or refinement-level DFT, per rrho_method).
+    Stage 3 (Scoring): DFT single-point energy (RRHO carried over unchanged).
 
     Returns Ensemble with Boltzmann weights assigned.
     """
     output_dir = Path(config.compute.output_dir)
+
+    # Aqueous solvent used for xTB (ALPB) throughout: conformer sampling and the
+    # xtb-level RRHO at both sampling and refinement.
+    solvent = "water"
 
     # Stage 1: Sampling
     log.info("=== Stage 1: Sampling ===")
@@ -32,7 +38,7 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
         ensemble = run_approach1(
             smiles=config.molecule.smiles,
             charge_range=config.molecule.charge_range,
-            solvent="water",
+            solvent=solvent,
             crest_mode=config.sampling.crest_mode,
             ewin=config.sampling.ewin,
             threads=config.compute.threads,
@@ -43,7 +49,7 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
         ensemble = run_approach2(
             smiles=config.molecule.smiles,
             charge_range=config.molecule.charge_range,
-            solvent="water",
+            solvent=solvent,
             prescreen_mode=config.sampling.prescreen_mode,
             full_mode=config.sampling.full_mode,
             prescreen_ewin=config.sampling.prescreen_ewin,
@@ -65,7 +71,8 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
         solvent=ref.solvent,
         ewin=ref.ewin,
         pcm_hydrogen_radius=ref.pcm_hydrogen_radius,
-        compute_rrho=config.scoring.rrho_level == "refinement",
+        rrho_method=ref.rrho_method,
+        xtb_rrho_solvent=solvent,
         threads=threads,
     )
     serialize_ensemble(ensemble, output_dir / "refinement")
@@ -73,11 +80,6 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
     # Stage 3: Scoring
     log.info("=== Stage 3: Scoring ===")
     sc = config.scoring
-    if sc.rrho_level == "sampling":
-        log.warning(
-            "rrho_level='sampling' — no RRHO correction will be applied "
-            "(sampling does not compute vibrational frequencies)"
-        )
     score(
         ensemble,
         driver_name=config.compute.driver,
@@ -87,7 +89,6 @@ def run_pipeline(config: PkaConfig) -> Ensemble:
         solvent=sc.solvent,
         ewin=sc.ewin,
         pcm_hydrogen_radius=sc.pcm_hydrogen_radius,
-        compute_rrho=sc.rrho_level == "scoring",
         threads=threads,
     )
 
