@@ -1,6 +1,8 @@
 """Wrapper for CREST: conformer search, tautomerization, protonation/deprotonation.
 
-CREST 3.x evaluates GFN2-xTB through its in-process tblite backend.
+CREST 2.12 evaluates GFN2-xTB by driving the external ``xtb`` binary as a
+subprocess. We pin 2.12 because the CREST 3.x in-process rewrite collapses
+conformer searches to a single structure on macOS (see pixi.toml).
 """
 
 from __future__ import annotations

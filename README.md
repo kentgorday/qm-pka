@@ -185,6 +185,18 @@ The set of things that look weird and aren't. Read before "fixing":
   dependency) instead of a build rebuilt against `mctc-lib` 0.5.x. xtb 6.7.1
   build >=4 also fixes a Fortran format-string bug
   ([xtb#1332](https://github.com/grimme-lab/xtb/issues/1332)).
+- **`crest` is pinned to `2.12.*`, not 3.x.** The CREST 3.x rewrite moved
+  optimization/MD/MTD in-process, and on macOS its conformer search collapses
+  every ensemble to a single structure — reproduced as n-pentane giving 1
+  conformer on 3.0.2 vs 6 on 2.12, on both osx-arm64 and osx-64-under-Rosetta
+  (so it's the 3.x source, not arch codegen), independent of threads/`--ewin`/
+  TOML-vs-CLI; the 3.x optimizer itself is fine, the iMTD-GC pipeline is not.
+  See [crest#407](https://github.com/crest-lab/crest/issues/407),
+  [#411](https://github.com/crest-lab/crest/issues/411),
+  [#412](https://github.com/crest-lab/crest/issues/412). 2.12 drives the
+  external `xtb` binary and works; pinning it moves only `crest` (xtb and all
+  DFT deps stay put). Consequence: `single_point()` and `frequencies()` call
+  `xtb` directly, since CREST 2.x has no `--sp` run mode.
 - **wB97X-D4 / wB97X-D4rev / wB97X-3c are re-registered with PySCF**
   (`pyscf_runner.py::_register_d4_composites`). PySCF's native `wb97x-d4`
   string maps to libxc 464 (the original 2008 wB97X) plus D4. The actual

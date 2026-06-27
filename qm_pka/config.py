@@ -64,7 +64,7 @@ class MoleculeConfig:
 @dataclass
 class SamplingConfig:
     approach: str = "rdkit_first"  # "rdkit_first" or "crest_first"
-    ewin: float = 6.0  # energy window (kcal/mol)
+    ewin: float = 10.0  # energy window (kcal/mol)
     # Approach 1 (rdkit_first) options
     max_tautomers: int = 1000
     max_transforms: int = 1000
@@ -152,7 +152,7 @@ def load_config(path: Path) -> PkaConfig:
     samp_raw = raw.get("sampling", {})
     sampling = SamplingConfig(
         approach=samp_raw.get("approach", "rdkit_first"),
-        ewin=samp_raw.get("ewin", 6.0),
+        ewin=samp_raw.get("ewin", 10.0),
         max_tautomers=samp_raw.get("max_tautomers", 1000),
         max_transforms=samp_raw.get("max_transforms", 1000),
         crest_mode=samp_raw.get("crest_mode", "default"),

@@ -223,7 +223,7 @@ class TestSamplingConfig:
         """)
         )
         assert cfg.sampling.approach == "rdkit_first"
-        assert cfg.sampling.ewin == 6.0
+        assert cfg.sampling.ewin == 10.0
 
     def test_crest_first(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
