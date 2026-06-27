@@ -1,12 +1,11 @@
 """Wrappers around CREST/xtb for xTB geometry optimization, single-point
 energy, and quasi-RRHO vibrational free-energy corrections.
 
-CREST 3.x evaluates GFN2-xTB through its in-process tblite backend, used here
-for optimization and single points. Hessians go through the standalone ``xtb``
-binary instead: CREST's calculator does not implement the biased Hessian
-("bhess not implemented for calculator routines") and the ``tblite`` CLI
-cannot compute Hessians at all, so ``xtb`` is the only tool that provides both
-``--hess`` and ``--bhess``.
+CREST 2.12 drives the external ``xtb`` binary as a subprocess (the CREST 3.x
+in-process rewrite produces degenerate single-conformer ensembles on macOS, so
+we pin 2.12). Geometry optimization goes through CREST (``--mdopt``); single
+points and Hessians call ``xtb`` directly, since CREST 2.x has no single-point
+run mode and only the ``xtb`` binary provides ``--hess``/``--bhess``.
 """
 
 from __future__ import annotations
@@ -89,9 +88,11 @@ def single_point(
     solvent: str | None = None,
     work_dir: Path | None = None,
 ) -> float:
-    """Run single-point energy calculation via CREST --sp.
+    """Run a single-point energy calculation via the standalone xtb binary.
 
-    Returns the total energy in Hartree.
+    CREST 2.x has no single-point run mode (``--sp`` is silently ignored and a
+    full conformer search runs instead), so this calls ``xtb`` directly, which
+    is also the engine CREST drives internally. Returns the energy in Hartree.
     """
     cleanup = False
     if work_dir is None:
@@ -103,10 +104,11 @@ def single_point(
         write_xyz(geom, input_xyz)
 
         cmd = [
-            "crest",
+            "xtb",
             str(input_xyz),
             "--sp",
-            "--gfn2" if gfn == 2 else f"--gfn{gfn}",
+            "--gfn",
+            str(gfn),
             "--chrg",
             str(charge),
         ]
@@ -122,7 +124,7 @@ def single_point(
         )
         if result.returncode != 0:
             raise RuntimeError(
-                f"crest single-point failed (exit {result.returncode}):\n{result.stderr[-2000:]}"
+                f"xtb single-point failed (exit {result.returncode}):\n{result.stderr[-2000:]}"
             )
 
         return _parse_energy(result.stdout)
@@ -222,8 +224,8 @@ def _parse_g98_frequencies(text: str) -> list[float]:
 
 
 def _parse_energy(stdout: str) -> float:
-    """Parse total energy from CREST stdout."""
+    """Parse total energy from xtb stdout."""
     match = re.search(r"TOTAL ENERGY\s+([-\d.]+)\s+Eh", stdout)
     if match is None:
-        raise RuntimeError("Could not parse energy from CREST output")
+        raise RuntimeError("Could not parse energy from xtb output")
     return float(match.group(1))

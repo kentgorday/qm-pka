@@ -12,7 +12,13 @@ typecheck = "mypy qm_pka/ tests/ scripts/"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
 
 [dependencies]
-crest = ">=3.0.2,<4"
+# Pin CREST 2.12 (not 3.x). The CREST 3.x rewrite moved optimization/MD/MTD
+# in-process; on macOS its conformer search collapses every ensemble to a single
+# structure (verified: n-pentane gives 1 conformer on 3.0.2 vs 6 on 2.12, on both
+# osx-arm64 and osx-64-under-Rosetta; cf. crest-lab/crest#407,#411,#412). 2.12
+# drives the external xtb binary and works. single_point() and frequencies() call
+# xtb directly (CREST 2.x has no --sp run mode).
+crest = "2.12.*"
 gcp-correction = ">=2.3.2,<3"
 # Floor xtb at 6.7.1. gcp-correction 2.3.2 build 2 requires mctc-lib >=0.5.1; without
 # this floor the solver falls back to xtb 6.4.1 (the last release with no mctc-lib

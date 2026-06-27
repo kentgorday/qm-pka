@@ -32,7 +32,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cpcm-x-1.1.0-gfortran_ha02e54d_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cpp-argparse-3.2-h84d6215_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cpptrace-1.0.4-default_h6df28a2_100.conda
-      - conda: https://conda.anaconda.org/conda-forge/linux-64/crest-3.0.2-h8876d29_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/linux-64/crest-2.12-h9d67668_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/noarch/cycler-0.12.1-pyhcf101f3_2.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/cyrus-sasl-2.1.28-hac629b4_1.conda
       - conda: https://conda.anaconda.org/conda-forge/linux-64/dftd3-python-1.4.0-py313h07c4f96_0.conda
@@ -238,7 +238,7 @@ environments:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cpcm-x-1.1.0-gfortran_h69f682d_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cpp-argparse-3.2-ha393de7_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cpptrace-1.0.4-default_h7920499_100.conda
-      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/crest-3.0.2-hb2118c8_1.conda
+      - conda: https://conda.anaconda.org/conda-forge/osx-arm64/crest-2.12-hd8c59f4_0.tar.bz2
       - conda: https://conda.anaconda.org/conda-forge/noarch/cycler-0.12.1-pyhcf101f3_2.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/cyrus-sasl-2.1.28-hb961e35_1.conda
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/dftd3-python-1.4.0-py313h0997733_0.conda
@@ -895,41 +895,38 @@ packages:
   purls: []
   size: 186833
   timestamp: 1772158790783
-- conda: https://conda.anaconda.org/conda-forge/linux-64/crest-3.0.2-h8876d29_1.conda
-  sha256: a316306ae0c900ebf6870b185fbe6a36a054b9b1f3963a16210cf1cb2d0ceb6f
-  md5: 18858ac36b3ced56e7b3b32a4b200fc4
+- conda: https://conda.anaconda.org/conda-forge/linux-64/crest-2.12-h9d67668_0.tar.bz2
+  sha256: 8b5dd73ba896245b46e1c2f22d5e687f96b6cf11c5926245f3a446da2c0ceaac
+  md5: 8ba9a8ea66b0b07178ea736a16d43f9a
   depends:
-  - __glibc >=2.17,<3.0.a0
   - _openmp_mutex >=4.5
-  - libblas >=3.9.0,<4.0a0
-  - libgcc >=14
-  - libgfortran
-  - libgfortran5 >=14.3.0
-  - liblapack >=3.9.0,<4.0a0
+  - libblas >=3.8.0,<4.0a0
+  - libgcc-ng >=10.3.0
+  - libgfortran-ng
+  - libgfortran5 >=10.3.0
+  - liblapack >=3.8.0,<4.0a0
   - xtb
   license: LGPL-3.0-or-later
   license_family: GPL
   purls: []
-  size: 31295513
-  timestamp: 1754411554164
-- conda: https://conda.anaconda.org/conda-forge/osx-arm64/crest-3.0.2-hb2118c8_1.conda
-  sha256: 5b0b090de9127310ebe7fbd0d6e8689f075223db2721af03e1b793045982e436
-  md5: 48f10e05e3a3f793b65b7f36148ea88c
+  size: 746101
+  timestamp: 1653057632248
+- conda: https://conda.anaconda.org/conda-forge/osx-arm64/crest-2.12-hd8c59f4_0.tar.bz2
+  sha256: 4133216775a8fc0fdb2d44376852385655941b8966d58851611cebb621381e1c
+  md5: 9c037429d2d8a03f06e8727c93d642bf
   depends:
-  - __osx >=11.0
   - libblas >=3.9.0,<4.0a0
-  - libgfortran
-  - libgfortran5 >=14.3.0
-  - libgfortran5 >=15.1.0
+  - libgfortran >=5
+  - libgfortran5 >=11.0.1.dev0
   - liblapack >=3.9.0,<4.0a0
-  - llvm-openmp >=19.1.7
-  - llvm-openmp >=20.1.8
+  - llvm-openmp >=13.0.1
+  - llvm-openmp >=14.0.3
   - xtb
   license: LGPL-3.0-or-later
   license_family: GPL
   purls: []
-  size: 20546032
-  timestamp: 1754412422842
+  size: 791975
+  timestamp: 1653058000667
 - conda: https://conda.anaconda.org/conda-forge/noarch/cycler-0.12.1-pyhcf101f3_2.conda
   sha256: bb47aec5338695ff8efbddbc669064a3b10fe34ad881fb8ad5d64fbfa6910ed1
   md5: 4c2a8fef270f6c69591889b93f9f55c1
