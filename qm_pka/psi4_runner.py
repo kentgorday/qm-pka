@@ -339,8 +339,15 @@ set {{
     input_text += _bse_basis_block(basis, geom)
 
     # Wrap optimize() so that a non-convergence exception still yields a
-    # geometry and energy on disk (from the last optimizer step).
+    # geometry and energy on disk (from the last optimizer step).  Two failure
+    # modes are treated the same way: psi4's OptimizationConvergenceError
+    # (geom_maxiter reached) and optking's "Maximum dynamic_level reached"
+    # OptError (adaptive recovery exhausted).  Both leave a usable last-step
+    # geometry in the active molecule; unlike OptimizationConvergenceError the
+    # OptError carries no wfn, so we recover the energy with a single-point on
+    # that geometry.  Any other failure (e.g. SCF non-convergence) propagates.
     input_text += f"""
+from optking.exceptions import OptError
 converged = True
 try:
     E, wfn = optimize('{method}', return_wfn=True)
@@ -349,6 +356,12 @@ except psi4.OptimizationConvergenceError as exc:
     wfn = exc.wfn
     E = wfn.energy()
     psi4.print_out('\\n=== OPT NOT CONVERGED: using last geometry ===\\n')
+except OptError as exc:
+    if 'dynamic_level' not in str(exc):
+        raise
+    converged = False
+    E, wfn = energy('{method}', return_wfn=True)
+    psi4.print_out('\\n=== OPT NOT CONVERGED (dynamic_level): using last geometry ===\\n')
 psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 psi4.print_out(f'\\n=== CONVERGED: {{1 if converged else 0}} ===\\n')
 wfn.molecule().save_xyz_file('optimized.xyz', True)
