@@ -14,6 +14,8 @@ from qm_pka.pyscf_runner import (
     _build_mf,
     _resolve_basis,
     _resolve_method,
+    optimize,
+    single_point,
 )
 from qm_pka.types import Geometry
 
@@ -289,3 +291,39 @@ class TestHessianFallback:
     def test_non_d4_methods_not_in_fallback(self) -> None:
         for method in ["wb97m-v", "wb97x-d3bj", "b3lyp"]:
             assert method not in _HESSIAN_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# optimize() returns the minimized energy, not a stale input-geometry energy
+# ---------------------------------------------------------------------------
+class TestOptimizeEnergy:
+    """Regression guard: geomeTRIC drives the optimization on a copy of the
+    molecule and never writes the final energy back to the mean-field object,
+    so returning ``mf.e_tot`` yields the *input*-geometry energy (was ~25
+    kcal/mol stale).  optimize() must return the energy of the geometry it
+    returns.
+    """
+
+    @pytest.mark.slow
+    def test_energy_matches_returned_geometry(self) -> None:
+        # Distorted water so the optimizer has to move the atoms appreciably.
+        start = Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array(
+                [[0.0, 0.0, 0.0], [0.9, 0.0, 0.0], [-0.3, 0.85, 0.0]],
+                dtype=np.float64,
+            ),
+        )
+        method, basis = "pbe", "sto-3g"
+
+        e_input = single_point(start, 0, method, basis, threads=1)
+        opt_geom, e_opt, converged = optimize(start, 0, method, basis, threads=1)
+        e_at_opt = single_point(opt_geom, 0, method, basis, threads=1)
+
+        assert converged
+        # The returned energy is the one at the returned geometry ...
+        assert e_opt == pytest.approx(e_at_opt, abs=1e-6)
+        # ... and relaxation actually lowered it well below the input geometry,
+        # so a stale mf.e_tot (== e_input) would be caught.
+        assert e_input - e_opt > 1e-3
+        assert e_opt < e_at_opt + 1e-6

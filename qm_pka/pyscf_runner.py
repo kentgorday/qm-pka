@@ -392,13 +392,26 @@ def optimize(
             threads,
         )
         _run_scf_robust(mf_local)
+        # geom_kernel drives the optimization on a *copy* of the molecule and
+        # never writes the final energy back to mf_local, so mf_local.e_tot is
+        # stale (it holds the input-geometry SCF energy).  Capture the energy of
+        # each step via geomeTRIC's callback; the last one corresponds to the
+        # returned geometry, since convergence is checked after the final step.
+        energies: list[float] = []
         with tempfile.TemporaryDirectory(prefix="pyscf_opt_") as tmpdir:
             conv, mol_opt = geom_kernel(
-                mf_local, maxsteps=maxsteps, tmpdir=tmpdir, coordsys=coordsys
+                mf_local,
+                maxsteps=maxsteps,
+                tmpdir=tmpdir,
+                coordsys=coordsys,
+                callback=lambda env: energies.append(float(env["energy"])),
             )
         coords_ang = np.asarray(mol_opt.atom_coords(), dtype=np.float64) * BOHR_TO_ANG
         out_geom = Geometry(symbols=tuple(mol_opt.elements), coords=coords_ang)
-        return out_geom, float(mf_local.e_tot), bool(conv)
+        # Fall back to mf_local.e_tot only if no step was evaluated, in which
+        # case the geometry is unchanged and that energy is the right one.
+        energy = energies[-1] if energies else float(mf_local.e_tot)
+        return out_geom, energy, bool(conv)
 
     # First attempt: default TRIC (internal coordinates)
     opt_geom, energy, converged = _run(geom, coordsys="tric", maxsteps=100)
