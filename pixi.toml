@@ -32,7 +32,12 @@ mypy = ">=1.20.0,<2"
 # DFT backends: Psi4 (subprocess) and PySCF (Python library).
 # Psi4: wB97X-3c gas-phase (no analytical PCM gradients).
 # PySCF: wB97X-3c/vDZP (default refinement) or wB97M-V + SMD (scoring).
-pyscf = ">=2.7,<3"
+# Capped <2.13: PySCF 2.13's dispersion rewrite (PR #3209) breaks our D4
+# composite registration — wB97X-3c/-D4rev silently get plain wB97X D4
+# params (wrong E_disp, corrupts energies + geometries). PySCF's dispersion
+# handling is still in flux post-2.13 (see ~v2.16 renames), so there's no
+# stable fix + new floor to adopt yet; keep <2.13 until it settles.
+pyscf = ">=2.7,<2.13"
 # Dispersion corrections: dftd3-python and dftd4-python provide the shared
 # libraries used by both Psi4 and PySCF. pyscf-dispersion is the PySCF
 # extension that bridges PySCF's XC string parsing to these libraries.
