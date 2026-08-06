@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from types import ModuleType
 
+from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.ensemble import filter_charge_state_by_energy
 from qm_pka.types import Ensemble
 
@@ -39,6 +40,7 @@ def score(
     ewin: float = 10.0,
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> Ensemble:
     """Score all conformers via high-level DFT single-point energy.
 
@@ -73,15 +75,26 @@ def score(
                             solvent,
                             pcm_hydrogen_radius=pcm_hydrogen_radius,
                             threads=threads,
+                            memory_gb=memory_gb,
                         )
                         gas = driver.single_point(
-                            conf.geometry, cs.charge, method, basis, threads=threads
+                            conf.geometry,
+                            cs.charge,
+                            method,
+                            basis,
+                            threads=threads,
+                            memory_gb=memory_gb,
                         )
                         conf.electronic_energy = gas
                         conf.solvation_energy = total - gas
                     else:
                         conf.electronic_energy = driver.single_point(
-                            conf.geometry, cs.charge, method, basis, threads=threads
+                            conf.geometry,
+                            cs.charge,
+                            method,
+                            basis,
+                            threads=threads,
+                            memory_gb=memory_gb,
                         )
                         conf.solvation_energy = None
 

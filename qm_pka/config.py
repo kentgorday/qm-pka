@@ -15,6 +15,14 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Per-QM-job memory ceiling, shared by both backends so a given config means
+# the same thing on either one.  Their native defaults disagree by 8x (Psi4
+# 500 MiB, PySCF 4 GB), which is an invisible backend difference in a project
+# that cross-checks the two.  4 GB matches PySCF's own default, so only Psi4
+# moves; measured wall time on def2-QZVPPD/wB97M-V is flat from 4 GB up, so
+# there is nothing to buy by going higher.
+DEFAULT_MEMORY_GB = 4.0
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -103,6 +111,7 @@ class ScoringConfig:
 class ComputeConfig:
     driver: str = "pyscf"  # "psi4" or "pyscf"
     threads: int | None = None
+    memory_gb: float = DEFAULT_MEMORY_GB
     output_dir: str = "output"
 
 
@@ -143,8 +152,11 @@ def load_config(path: Path) -> PkaConfig:
     compute = ComputeConfig(
         driver=compute_raw.get("driver", "pyscf"),
         threads=compute_raw.get("threads"),
+        memory_gb=compute_raw.get("memory_gb", DEFAULT_MEMORY_GB),
         output_dir=compute_raw.get("output_dir", "output"),
     )
+    if compute.memory_gb <= 0:
+        raise ValueError(f"[compute] memory_gb must be positive, got {compute.memory_gb}")
     if compute.driver not in ("psi4", "pyscf"):
         raise ValueError(f"Unknown driver: {compute.driver!r} (must be 'psi4' or 'pyscf')")
 
