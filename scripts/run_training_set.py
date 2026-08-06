@@ -16,6 +16,12 @@ Usage:
 
 Resume after interruption:
     pixi run python scripts/run_training_set.py --resume ...
+
+--resume skips finished molecules outright and, for an unfinished one, picks up
+at the first stage that has no checkpoint on disk -- a molecule killed during
+scoring reuses its sampling and refinement output rather than redoing days of
+DFT.  Note that only the molecule's SMILES is validated against the checkpoint;
+see _find_resume_point in qm_pka/pipeline.py.
 """
 
 from __future__ import annotations
@@ -27,11 +33,11 @@ import sys
 import traceback
 from pathlib import Path
 
-from qm_pka.config import load_config
+from qm_pka.config import DEFAULT_MEMORY_GB, load_config
 from qm_pka.pipeline import run_pipeline
 
 
-def make_toml(smi: str, output_dir: Path, driver: str, threads: int) -> str:
+def make_toml(smi: str, output_dir: Path, driver: str, threads: int, memory_gb: float) -> str:
     """Build a TOML config string for one molecule.
 
     Charge range is hardcoded to [-2, +2]. Empty charge states (e.g. when
@@ -65,6 +71,7 @@ ewin = 10.0
 [compute]
 driver = "{driver}"
 threads = {threads}
+memory_gb = {memory_gb}
 output_dir = "{output_dir}"
 '''
 
@@ -91,6 +98,18 @@ def main() -> None:
     parser.add_argument("--driver", default="pyscf", choices=["pyscf", "psi4"])
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument(
+        "--memory",
+        type=float,
+        default=DEFAULT_MEMORY_GB,
+        metavar="GB",
+        help=(
+            f"Per-QM-job memory ceiling in GB (default: {DEFAULT_MEMORY_GB}). "
+            "Applies to both backends. Raising it past a few GB buys nothing on "
+            "def2-QZVPPD/wB97M-V; PySCF will try to allocate up to this, so keep "
+            "it under real free memory."
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=None,
@@ -99,7 +118,11 @@ def main() -> None:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="Skip molecules whose final ensemble.json already exists",
+        help=(
+            "Skip molecules whose final ensemble.json already exists, and for "
+            "the rest reuse any completed sampling/ or refinement/ checkpoint "
+            "instead of recomputing it"
+        ),
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -146,12 +169,12 @@ def main() -> None:
         log.info(f"[{i}/{len(rows)}] {uid} ({smi}): starting")
         try:
             compound_dir.mkdir(parents=True, exist_ok=True)
-            toml_text = make_toml(smi, compound_dir, args.driver, args.threads)
+            toml_text = make_toml(smi, compound_dir, args.driver, args.threads, args.memory)
             toml_path = compound_dir / "config.toml"
             toml_path.write_text(toml_text)
 
             config = load_config(toml_path)
-            run_pipeline(config)
+            run_pipeline(config, resume=args.resume)
             n_ok += 1
             log.info(f"[{i}/{len(rows)}] {uid}: done")
         except Exception as e:
