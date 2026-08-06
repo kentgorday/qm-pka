@@ -20,6 +20,7 @@ from typing import Any
 
 import numpy as np
 
+from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.types import Geometry
 
 log = logging.getLogger(__name__)
@@ -219,10 +220,16 @@ def _build_mf(
     solvent: str | None = None,
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> tuple[Any, Any]:
     """Build a PySCF Mole and mean-field object with the requested settings.
 
     Returns (mol, mf) where mf is ready for .kernel().
+
+    memory_gb caps the integral buffers via Mole.max_memory (PySCF's own
+    units are MB).  Unlike Psi4's --memory this is a budget PySCF acts on --
+    it picks incore vs outcore algorithms from it and will try to allocate --
+    so overshooting real free memory risks an OOM rather than just slow I/O.
     """
     from pyscf import dft, gto, lib
 
@@ -242,6 +249,7 @@ def _build_mf(
     mol.charge = charge
     mol.spin = geom.n_electrons(charge) % 2  # 0 for singlet, 1 for doublet
     mol.verbose = 3
+    mol.max_memory = memory_gb * 1024  # PySCF counts in MB
     mol.build()
 
     # Use RKS for closed-shell, UKS for open-shell
@@ -346,13 +354,22 @@ def single_point(
     solvent: str | None = None,
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> float:
     """Run a single-point DFT energy calculation.
 
     Returns the total energy in Hartree.
     """
     _mol, mf = _build_mf(
-        geom, charge, method, basis, solvent_model, solvent, pcm_hydrogen_radius, threads
+        geom,
+        charge,
+        method,
+        basis,
+        solvent_model,
+        solvent,
+        pcm_hydrogen_radius,
+        threads,
+        memory_gb,
     )
     return _run_scf_robust(mf)
 
@@ -366,6 +383,7 @@ def optimize(
     solvent: str | None = None,
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> tuple[Geometry, float, bool]:
     """Run DFT geometry optimization.
 
@@ -390,6 +408,7 @@ def optimize(
             solvent,
             pcm_hydrogen_radius,
             threads,
+            memory_gb,
         )
         _run_scf_robust(mf_local)
         # geom_kernel drives the optimization on a *copy* of the molecule and
@@ -436,6 +455,7 @@ def frequencies(
     solvent: str | None = None,
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> list[float]:
     """Compute harmonic vibrational frequencies.
 
@@ -454,7 +474,15 @@ def frequencies(
         )
 
     mol, mf = _build_mf(
-        geom, charge, hess_method, basis, solvent_model, solvent, pcm_hydrogen_radius, threads
+        geom,
+        charge,
+        hess_method,
+        basis,
+        solvent_model,
+        solvent,
+        pcm_hydrogen_radius,
+        threads,
+        memory_gb,
     )
     _run_scf_robust(mf)
 

@@ -10,6 +10,7 @@ import logging
 from types import ModuleType
 
 from qm_pka import xtb_runner
+from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.ensemble import filter_charge_state_by_energy
 from qm_pka.thermo import quasi_rrho_free_energy
 from qm_pka.types import Ensemble
@@ -42,6 +43,7 @@ def refine(
     rrho_method: str = "xtb",
     xtb_rrho_solvent: str | None = None,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> Ensemble:
     """Refine all conformers via DFT geometry optimization.
 
@@ -83,6 +85,7 @@ def refine(
                         solvent,
                         pcm_hydrogen_radius=pcm_hydrogen_radius,
                         threads=threads,
+                        memory_gb=memory_gb,
                     )
                     conf.geometry = opt_geom
                     conf.refinement_converged = converged
@@ -96,7 +99,12 @@ def refine(
                     if solvent_model is not None:
                         # opt_energy includes solvation — decompose
                         gas_energy = driver.single_point(
-                            opt_geom, cs.charge, method, basis, threads=threads
+                            opt_geom,
+                            cs.charge,
+                            method,
+                            basis,
+                            threads=threads,
+                            memory_gb=memory_gb,
                         )
                         conf.electronic_energy = gas_energy
                         conf.solvation_energy = opt_energy - gas_energy
@@ -122,6 +130,7 @@ def refine(
                             solvent,
                             pcm_hydrogen_radius=pcm_hydrogen_radius,
                             threads=threads,
+                            memory_gb=memory_gb,
                         )
                     conf.rrho_correction = quasi_rrho_free_energy(freqs)
 

@@ -9,11 +9,13 @@ recommended ROBUST grid pruning.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import subprocess
 import tempfile
 from pathlib import Path
 
+from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.types import Geometry
 from qm_pka.xyz_io import read_xyz
 
@@ -268,6 +270,7 @@ def single_point(
     solvent: str | None = None,
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> float:
     """Run a single-point DFT energy calculation.
 
@@ -295,8 +298,9 @@ E = energy('{method}')
 psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 """
 
-    output, _work_dir = _run_psi4(input_text, threads=threads)
-    return _parse_final_energy(output)
+    with _scratch_dir() as tmp:
+        output = _run_psi4(input_text, Path(tmp), threads=threads, memory_gb=memory_gb)
+        return _parse_final_energy(output)
 
 
 def optimize(
@@ -308,6 +312,7 @@ def optimize(
     solvent: str | None = None,
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> tuple[Geometry, float, bool]:
     """Run DFT geometry optimization.
 
@@ -367,10 +372,12 @@ psi4.print_out(f'\\n=== CONVERGED: {{1 if converged else 0}} ===\\n')
 wfn.molecule().save_xyz_file('optimized.xyz', True)
 """
 
-    output, work_dir = _run_psi4(input_text, threads=threads)
-    energy = _parse_final_energy(output)
-    converged = _parse_converged_flag(output)
-    opt_geom = read_xyz(work_dir / "optimized.xyz")
+    with _scratch_dir() as tmp:
+        work_dir = Path(tmp)
+        output = _run_psi4(input_text, work_dir, threads=threads, memory_gb=memory_gb)
+        energy = _parse_final_energy(output)
+        converged = _parse_converged_flag(output)
+        opt_geom = read_xyz(work_dir / "optimized.xyz")
 
     return opt_geom, energy, converged
 
@@ -384,6 +391,7 @@ def frequencies(
     solvent: str | None = None,
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
+    memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> list[float]:
     """Compute harmonic vibrational frequencies.
 
@@ -415,10 +423,13 @@ with open('frequencies.dat', 'w') as f:
 psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 """
 
-    _output, work_dir = _run_psi4(input_text, threads=threads)
+    with _scratch_dir() as tmp:
+        work_dir = Path(tmp)
+        _run_psi4(input_text, work_dir, threads=threads, memory_gb=memory_gb)
+        freq_text = (work_dir / "frequencies.dat").read_text()
 
     freq_list: list[float] = []
-    for line in (work_dir / "frequencies.dat").read_text().splitlines():
+    for line in freq_text.splitlines():
         stripped = line.strip()
         if stripped:
             freq_list.append(float(stripped))
@@ -431,18 +442,39 @@ psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 # ---------------------------------------------------------------------------
 
 
+def _scratch_dir() -> tempfile.TemporaryDirectory[str]:
+    """Scratch directory for one Psi4 job, cleaned up on ``with`` exit.
+
+    Every caller runs Psi4 inside one of these.  Leaking them is what filled
+    the disk during the first training-set run: on the out-of-core DFJK path
+    a single job writes several GB of three-index integrals, and nothing
+    deleted the directories afterwards.
+
+    Set QM_PKA_KEEP_SCRATCH=1 to retain them for postmortem debugging.
+    """
+    keep = os.environ.get("QM_PKA_KEEP_SCRATCH") == "1"
+    return tempfile.TemporaryDirectory(prefix="psi4_", delete=not keep)
+
+
 def _run_psi4(
     input_text: str,
+    work_dir: Path,
     timeout: int = 86400,
     threads: int = 1,
-) -> tuple[str, Path]:
-    """Write a Psi4 input file, run psi4, return (output_text, work_dir).
+    memory_gb: float = DEFAULT_MEMORY_GB,
+) -> str:
+    """Run psi4 inside work_dir and return the output text.
 
-    The work_dir is a temporary directory that persists so callers can
-    read output files (optimized.xyz, frequencies.dat, etc.).
+    work_dir owns the whole job: the input file, the output file, and — via
+    ``-s`` — Psi4's binary scratch.  Callers create it with _scratch_dir() so
+    that everything is removed together.  Any file Psi4 produces that the
+    caller needs (optimized.xyz, frequencies.dat) must be read before the
+    ``with`` block exits.
+
+    memory_gb becomes ``--memory``, always passed so that Psi4 never silently
+    falls back to its 500 MiB default (which starves the DFT collocation
+    cache) and so a config means the same thing on both backends.
     """
-    work_dir = Path(tempfile.mkdtemp(prefix="psi4_"))
-
     input_path = work_dir / "input.dat"
     output_path = work_dir / "output.dat"
     input_path.write_text(input_text)
@@ -454,6 +486,10 @@ def _run_psi4(
         str(output_path),
         "-n",
         str(threads),
+        "-s",
+        str(work_dir),
+        "--memory",
+        f"{memory_gb}GB",
     ]
 
     log.info(f"Running Psi4 in {work_dir}")
@@ -477,7 +513,7 @@ def _run_psi4(
             f"output (last 2000 chars): {output_text[-2000:]}"
         )
 
-    return output_text, work_dir
+    return output_text
 
 
 def _parse_final_energy(output: str) -> float:
