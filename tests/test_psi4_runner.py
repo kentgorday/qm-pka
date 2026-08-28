@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from qm_pka import psi4_runner
 from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.psi4_runner import (
     _MODIFIED_BONDI_RADII,
@@ -180,3 +181,84 @@ class TestMemoryFlag:
         with _scratch_dir() as tmp:
             _run_psi4("E = energy('scf')", Path(tmp))
             assert f"-s {tmp}" in (tmp_path / "argv.txt").read_text()
+
+
+# ---------------------------------------------------------------------------
+# PCM cavity validity
+# ---------------------------------------------------------------------------
+def test_pcm_block_emits_the_requested_tessera_area() -> None:
+    """The area must reach the input deck; a silent default would make the
+    cavity search a no-op that still reports success."""
+    geom = Geometry(
+        symbols=("O", "H", "H"),
+        coords=np.array([[0.0, 0.0, 0.0], [0.9572, 0.0, 0.0], [-0.24, 0.9266, 0.0]]),
+    )
+    default = psi4_runner._pcm_block("IEFPCM", "water", geom)
+    custom = psi4_runner._pcm_block("IEFPCM", "water", geom, area=0.05)
+    assert f"Area = {psi4_runner.DEFAULT_TESSERA_AREA}" in default
+    assert "Area = 0.05" in custom
+
+
+def test_run_psi4_rejects_a_suppressed_pcm_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """PCMSolver's cavity checks are patched to warnings in this build, so a
+    job can exit 0 with a meaningless energy.  Exit status alone must not be
+    treated as success."""
+
+    class _Result:
+        returncode = 0
+        stdout = ""
+        stderr = (
+            "Absolute value of the relative difference between the Gauss' theorem "
+            "(-15.7959) and computed (-16.0515) values of the total nuclear ASC "
+            "higher than threshold (0.0161811).\n"
+            "Normally an error, this has been commuted to a warning via patch.\n"
+        )
+
+    monkeypatch.setattr("qm_pka.psi4_runner.subprocess.run", lambda *a, **k: _Result())
+    (tmp_path / "output.dat").write_text("=== FINAL ENERGY: -1.0 ===")
+    with pytest.raises(RuntimeError, match="invalid cavity"):
+        psi4_runner._run_psi4("", tmp_path)
+
+
+def test_choose_tessera_area_prefers_the_default_and_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A healthy geometry costs one probe; an unhealthy one searches the ladder
+    rather than refining blindly, because validity is not monotonic in area."""
+    geom = Geometry(
+        symbols=("O", "H", "H"),
+        coords=np.array([[0.0, 0.0, 0.0], [0.9572, 0.0, 0.0], [-0.24, 0.9266, 0.0]]),
+    )
+    psi4_runner._cavity_cache.clear()
+    monkeypatch.setattr(psi4_runner, "_cavity_is_valid", lambda *a, **k: True)
+    assert psi4_runner.choose_tessera_area(geom, 0, "IEFPCM", "water") == (
+        psi4_runner.DEFAULT_TESSERA_AREA
+    )
+
+    tried: list[float] = []
+
+    def _only_third_works(*args: object, **kwargs: object) -> bool:
+        tried.append(args[5] if len(args) > 5 else kwargs["area"])  # type: ignore[arg-type]
+        return len(tried) == 3
+
+    psi4_runner._cavity_cache.clear()
+    monkeypatch.setattr(psi4_runner, "_cavity_is_valid", _only_third_works)
+    chosen = psi4_runner.choose_tessera_area(geom, 0, "IEFPCM", "water")
+    assert chosen == tried[2]
+    assert tried[0] == psi4_runner.DEFAULT_TESSERA_AREA
+
+
+def test_choose_tessera_area_raises_when_no_area_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Better a dropped conformer than a converged, meaningless energy."""
+    geom = Geometry(
+        symbols=("O", "H", "H"),
+        coords=np.array([[0.0, 0.0, 0.0], [0.9572, 0.0, 0.0], [-0.24, 0.9266, 0.0]]),
+    )
+    psi4_runner._cavity_cache.clear()
+    monkeypatch.setattr(psi4_runner, "_cavity_is_valid", lambda *a, **k: False)
+    with pytest.raises(RuntimeError, match="No usable PCM cavity"):
+        psi4_runner.choose_tessera_area(geom, 0, "IEFPCM", "water")
