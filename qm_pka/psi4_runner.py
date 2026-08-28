@@ -139,6 +139,53 @@ _MODIFIED_BONDI_RADII: dict[str, float] = {
 # default alpha.
 _PCM_RADII_SCALING = 1.2
 
+# GePol tessera area (Angstrom^2).  PCMSolver's own default is 0.3; 0.1 is finer
+# and, per a valid-cavity control, already converged -- moving to 0.05 shifts a
+# healthy conformer by 0.014 kcal/mol.
+DEFAULT_TESSERA_AREA = 0.1
+
+# Areas to try when the default builds an invalid cavity.  Validity is NOT
+# monotonic in area: for one probed conformer the invalid bands were 0.10-0.12
+# and 0.25-0.40, with valid regions on both sides.  So this is a search, not a
+# descent.  Finer areas come first because they are the accurate direction --
+# coarser ones are a last resort that trade one discretization error for another.
+_TESSERA_AREA_LADDER = (0.07, 0.05, 0.03, 0.02, 0.16, 0.2, 0.5)
+
+# PCMSolver validates the discretized cavity two ways and, in the build used
+# here, both fatal errors have been patched down to warnings on stderr while
+# Psi4 still exits 0:
+#   * Gauss' theorem -- the total nuclear apparent surface charge must equal
+#     -Q(eps-1)/eps.  Any deviation is pure discretization error.
+#   * the single-layer operator S must be positive-definite.
+# A run that trips either one has produced a converged but meaningless energy.
+_PCM_INVALID_MARKERS = (
+    "total nuclear ASC",
+    "Gauss' theorem",
+    "S matrix is not positive-definite",
+)
+
+# Cavity validity depends only on geometry, radii and area -- never on the
+# wavefunction -- so the cheapest method Psi4 offers gives the same verdict as
+# def2-QZVPPD.  The probe deliberately goes through Psi4's ordinary PCM path
+# rather than driving PCMSolver directly, so that it exercises exactly the code
+# the real job will.  The SCF is stopped after one iteration: the cavity is
+# built (and checked) during SCF setup, so converging an energy we discard is
+# pure waste -- measured 10.4s -> 4.3s on a 16-atom cation.
+_CAVITY_PROBE_BASIS = "STO-3G"
+_CAVITY_PROBE_METHOD = "HF"
+
+# Stopping the SCF early makes psi4 exit non-zero, so the exit code can no
+# longer stand in for "the probe ran".  These strings appear once PCMSolver has
+# built the cavity and formed its matrix, which is when the validity checks
+# fire.  Without positive evidence of that, a probe which died early would look
+# indistinguishable from a clean one -- the same false-negative trap as
+# treating a timeout as a pass.
+_CAVITY_BUILT_MARKERS = ("PCM matrix hermitivitized", "Average tesserae area")
+
+# (coords, charge, hydrogen radius, area) -> valid?  One geometry is often put
+# through several PCM jobs; the probe is cheap but not free.
+_cavity_cache: dict[tuple[bytes, int, float, float], bool] = {}
+
 
 def _molecule_block(geom: Geometry, charge: int) -> str:
     """Build a Psi4 molecule block from a Geometry and charge."""
@@ -212,6 +259,7 @@ def _pcm_block(
     solvent: str,
     geom: Geometry,
     pcm_hydrogen_radius: float = 1.1,
+    area: float = DEFAULT_TESSERA_AREA,
 ) -> str:
     """Build the Psi4 PCM section with modified-Bondi cavity radii.
 
@@ -250,7 +298,7 @@ def _pcm_block(
         "  }",
         "  Cavity {",
         "    Type = GePol",
-        "    Area = 0.1",
+        f"    Area = {area}",
         "    Mode = Explicit",
         "    Spheres = [",
         ",\n".join(spheres),
@@ -259,6 +307,108 @@ def _pcm_block(
         "}",
     ]
     return "\n".join(lines)
+
+
+def _cavity_is_valid(
+    geom: Geometry,
+    charge: int,
+    solvent_model: str,
+    solvent: str,
+    pcm_hydrogen_radius: float,
+    area: float,
+    threads: int = 1,
+) -> bool:
+    """Does PCMSolver accept the cavity this geometry and area produce?
+
+    Runs a throwaway minimal-basis PCM job and inspects stderr.  The checks
+    never touch the wavefunction, so the verdict is identical to the one the
+    real job would get, at a small fraction of its cost.
+
+    A probe that fails to run is reported invalid rather than valid: a check
+    that did not complete must never be recorded as a check that passed.
+    """
+    key = (geom.coords.tobytes(), charge, pcm_hydrogen_radius, area)
+    if key in _cavity_cache:
+        return _cavity_cache[key]
+
+    mol_block = _molecule_block(geom, charge)
+    opts_block = _options_block(_CAVITY_PROBE_METHOD, _CAVITY_PROBE_BASIS, solvent_model)
+    input_text = (
+        f"molecule mol {{\n{mol_block}\n}}\n\n"
+        f"set {{\n{opts_block}\n  maxiter 1\n}}\n"
+        + "\n"
+        + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius, area)
+        + f"\n\nenergy('{_CAVITY_PROBE_METHOD}')\n"
+    )
+    with _scratch_dir() as tmp:
+        work_dir = Path(tmp)
+        (work_dir / "input.dat").write_text(input_text)
+        try:
+            result = subprocess.run(
+                [
+                    "psi4",
+                    str(work_dir / "input.dat"),
+                    "-o",
+                    str(work_dir / "output.dat"),
+                    "-n",
+                    str(threads),
+                    "-s",
+                    str(work_dir),
+                    "--memory",
+                    "2GB",
+                ],
+                cwd=work_dir,
+                capture_output=True,
+                text=True,
+                timeout=3600,
+            )
+            stderr = result.stderr
+            out_path = work_dir / "output.dat"
+            output = out_path.read_text() if out_path.exists() else ""
+            # Not `returncode == 0`: the SCF is stopped after one iteration on
+            # purpose, so a non-zero exit is expected.  What matters is whether
+            # PCMSolver got as far as building and checking the cavity.
+            ran = any(m in output for m in _CAVITY_BUILT_MARKERS)
+        except (subprocess.TimeoutExpired, OSError):
+            ran, stderr = False, ""
+    valid = ran and not any(m in stderr for m in _PCM_INVALID_MARKERS)
+    _cavity_cache[key] = valid
+    return valid
+
+
+def choose_tessera_area(
+    geom: Geometry,
+    charge: int,
+    solvent_model: str,
+    solvent: str,
+    pcm_hydrogen_radius: float = 1.1,
+    threads: int = 1,
+) -> float:
+    """Return a tessera area that yields a valid cavity for this geometry.
+
+    Tries the default first, so a healthy geometry costs one cheap probe and
+    nothing else.  On failure it searches the ladder rather than simply
+    refining, because validity is not monotonic in area.
+
+    Raises RuntimeError if no candidate works -- better a dropped conformer
+    than a converged, meaningless energy.
+    """
+    for area in (DEFAULT_TESSERA_AREA, *_TESSERA_AREA_LADDER):
+        if _cavity_is_valid(
+            geom, charge, solvent_model, solvent, pcm_hydrogen_radius, area, threads
+        ):
+            if area != DEFAULT_TESSERA_AREA:
+                log.warning(
+                    f"  PCM cavity invalid at Area={DEFAULT_TESSERA_AREA}; "
+                    f"using Area={area} for this geometry"
+                )
+            return area
+    raise RuntimeError(
+        "No usable PCM cavity: PCMSolver rejected every tessera area in "
+        f"{(DEFAULT_TESSERA_AREA, *_TESSERA_AREA_LADDER)}. Its validity checks "
+        "are patched to warnings in this build, so proceeding would return a "
+        "converged but meaningless energy."
+    )
 
 
 def single_point(
@@ -289,7 +439,12 @@ set {{
 }}
 """
     if solvent_model is not None and solvent is not None:
-        input_text += "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius) + "\n"
+        area = choose_tessera_area(
+            geom, charge, solvent_model, solvent, pcm_hydrogen_radius, threads
+        )
+        input_text += (
+            "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius, area) + "\n"
+        )
 
     input_text += _bse_basis_block(basis, geom)
 
@@ -339,7 +494,12 @@ set {{
 }}
 """
     if solvent_model is not None and solvent is not None:
-        input_text += "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius) + "\n"
+        area = choose_tessera_area(
+            geom, charge, solvent_model, solvent, pcm_hydrogen_radius, threads
+        )
+        input_text += (
+            "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius, area) + "\n"
+        )
 
     input_text += _bse_basis_block(basis, geom)
 
@@ -410,7 +570,12 @@ set {{
 }}
 """
     if solvent_model is not None and solvent is not None:
-        input_text += "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius) + "\n"
+        area = choose_tessera_area(
+            geom, charge, solvent_model, solvent, pcm_hydrogen_radius, threads
+        )
+        input_text += (
+            "\n" + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius, area) + "\n"
+        )
 
     input_text += _bse_basis_block(basis, geom)
 
@@ -511,6 +676,21 @@ def _run_psi4(
             f"Psi4 failed (exit {result.returncode}):\n"
             f"stderr: {result.stderr[-2000:]}\n"
             f"output (last 2000 chars): {output_text[-2000:]}"
+        )
+
+    # PCMSolver's cavity checks are fatal upstream but patched to warnings in
+    # this build, so a job can return a converged, meaningless energy and still
+    # exit 0.  stderr is the only place that is recorded, and it used to be read
+    # only on failure -- which is how three conformers in the training batch
+    # acquired solvation energies of several thousand kcal/mol unnoticed.
+    # choose_tessera_area() should have prevented this, so reaching here means
+    # the cheap probe and the real job disagreed.
+    tripped = [m for m in _PCM_INVALID_MARKERS if m in result.stderr]
+    if tripped:
+        raise RuntimeError(
+            f"PCMSolver reported an invalid cavity ({', '.join(tripped)}) on a job "
+            f"that exited 0; its energy is not usable.\n"
+            f"stderr: {result.stderr[-2000:]}"
         )
 
     return output_text
