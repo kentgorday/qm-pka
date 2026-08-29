@@ -210,6 +210,21 @@ The set of things that look weird and aren't. Read before "fixing":
 - **Psi4 + PCM avoidance.** Psi4 has no analytical PCM gradients;
   optimization with implicit solvent is impractically slow. The config
   loader warns. Either run Psi4 gas-phase or use PySCF.
+- **Every Psi4 PCM job pre-screens its cavity.** PCMSolver's two validity
+  checks — Gauss' theorem on the nuclear surface charge, and positive-
+  definiteness of the single-layer operator — are fatal upstream but patched to
+  warnings in this build, so Psi4 exits 0 and returns a meaningless energy
+  (this corrupted 324 of 941 conformers in the first training batch, one by
+  22,000 kcal/mol). So `_run_psi4` reads stderr on *success* too, and a cheap
+  HF/STO-3G probe checks the cavity before each real job: the checks depend
+  only on geometry, radii and area, never on the wavefunction, so a minimal
+  basis gives the same verdict for ~1% of the cost. On failure it *searches*
+  `_TESSERA_AREA_LADDER` rather than refining, because validity is not
+  monotonic in area — observed invalid bands at 0.10–0.12 and 0.25–0.40, and
+  one molecule needed a **coarser** area than the 0.1 default. Not applied to
+  PySCF: it discretizes with Lebedev grids plus a switching function rather
+  than GePol tesserae, and showed no failure on any of the 941, nor under 20x
+  grid degradation.
 - **Geometry optimizer fallback (PySCF).** TRIC internal coordinates first
   (100 steps); on non-convergence, restart in Cartesian coordinates from the
   last geometry (another 100 steps). Analogous to Psi4 optking's
