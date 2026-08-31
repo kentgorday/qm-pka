@@ -17,9 +17,9 @@ each charge state.
 
 | Stage | What it does | Tool | Sets |
 |---|---|---|---|
-| 1. Sampling | Enumerate tautomers, protonation states, stereoisomers, conformers | CREST + GFN2-xTB (ALPB water) | `electronic_energy`, `solvation_energy`, `rrho_correction` (xTB `--hess`) |
-| 2. Refinement | DFT geometry optimization + RRHO recompute on the DFT geometry | PySCF or Psi4 (+ xtb) | overwrites electronic/solvation with DFT values; recomputes `rrho_correction` |
-| 3. Scoring | High-level DFT single point | PySCF or Psi4 | overwrites electronic/solvation; leaves `rrho_correction` |
+| 1. Sampling | Enumerate tautomers, protonation states, stereoisomers, conformers | CREST + GFN2-xTB (ALPB water) | `electronic_energy`, `solvation_energy`, `rrho_correction` (xTB `--hess`), `multiplicity` |
+| 2. Refinement | DFT geometry optimization + RRHO recompute on the DFT geometry | PySCF or Psi4 (+ xtb) | overwrites electronic/solvation with DFT values; recomputes `rrho_correction` and `multiplicity` |
+| 3. Scoring | High-level DFT single point | PySCF or Psi4 | overwrites electronic/solvation; leaves `rrho_correction` and `multiplicity` |
 
 After scoring, `assign_weights` populates per-conformer Boltzmann weights and
 the ensemble is serialized to `ensemble.json`.
@@ -38,6 +38,13 @@ energy. It is then recomputed once on the refined DFT geometry, controlled by
   Unsupported on Psi4 with implicit solvent (no analytical PCM Hessians).
 
 Scoring never recomputes RRHO; the refinement value carries through.
+
+Sampling and refinement each deduplicate conformers before spending Hessians on
+them: a structure that is another one relabelled, or its mirror image, is
+collapsed and the survivor carries the weight of both. Refinement is where this
+matters most — DFT optimization relaxes a large fraction of distinct sampled
+conformers onto the same minimum. Scoring does not deduplicate, since it does
+not move geometries. See [docs/symmetry.md](docs/symmetry.md).
 
 ## Data model
 
@@ -62,13 +69,19 @@ Components are populated incrementally across stages. When a stage runs DFT
 with implicit solvent, it does a second gas-phase single point on the same
 geometry to keep the decomposition clean.
 
-A `Microstate` carries two corrections that affect partition-function
-weighting:
+Two corrections affect partition-function weighting, at different levels:
 
-- `includes_enantiomer: bool` — true when the microstate represents a
-  collapsed enantiomeric pair (multiplies its statistical weight by 2).
-- `symmetry_number: int` — sigma_rot from point-group detection on the
-  lowest-energy conformer (divides its weight).
+- `Microstate.includes_enantiomer: bool` — true when the microstate represents
+  a collapsed *configurational* enantiomer pair (R vs S), multiplying its
+  weight by 2.
+- `Conformer.multiplicity: float` — how many physical states this conformer
+  stands for, divided by its own rotational symmetry number. Set by
+  `ensemble.deduplicate_charge_state()` after every deduplication pass.
+
+The two are disjoint by construction and never both fire on the same
+reflection. See [docs/symmetry.md](docs/symmetry.md) for the full treatment —
+what gets deduplicated, why the count of relabelled copies is not a weight, and
+how to check a multiplicity by hand.
 
 Boltzmann weights are normalized **across all conformers of all microstates
 within a charge state**, since the macroscopic pKa depends on the full
@@ -149,6 +162,7 @@ Source under `qm_pka/`. One-liner per module:
 | `stereo.py` | Stereoisomer enumeration + enantiomer dedup via mirror-SMILES |
 | `tautomer_dedup.py` | H-count-per-heavy-atom fingerprint (used by approach 2) |
 | `thermo.py` | Quasi-RRHO free energy (Grimme 2012) |
+| `conformer_symmetry.py` | Symmetry-aware conformer dedup and multiplicities, from coordinates alone |
 | `ensemble.py` | Boltzmann weighting, energy-window filtering, JSON/SDF I/O |
 | `xyz_io.py` | XYZ read/write, including CREST multi-frame ensembles |
 

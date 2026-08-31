@@ -11,9 +11,9 @@ from types import ModuleType
 
 from qm_pka import xtb_runner
 from qm_pka.config import DEFAULT_MEMORY_GB
-from qm_pka.ensemble import filter_charge_state_by_energy
+from qm_pka.ensemble import deduplicate_charge_state, filter_charge_state_by_energy
 from qm_pka.thermo import quasi_rrho_free_energy
-from qm_pka.types import Ensemble
+from qm_pka.types import Ensemble, ExcludedConformer, ExclusionReason
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,13 @@ def refine(
          matching the refinement solvent. This replaces the cheap xTB RRHO that
          sampling computed on the xTB geometry.
 
+    Runs in two passes per charge state: every conformer is optimized first,
+    then symmetry-duplicate structures are collapsed, and only the survivors
+    get a Hessian. Optimization frequently maps distinct sampled conformers
+    onto one DFT minimum, so deduplicating first avoids paying for the same
+    frequencies twice -- and avoids two independent Hessians disagreeing about
+    a mirror-image pair whose vibrational spectra must be identical.
+
     Conformers whose optimizer ran but did not fully converge are kept
     (with refinement_converged=False) since the last-step geometry is
     usually good enough for conformer screening.  Conformers that raise
@@ -75,6 +82,11 @@ def refine(
         for ms in cs.microstates:
             surviving = []
             for conf in ms.conformers:
+                # Which half of the try raised.  The gas-phase point runs only
+                # to decompose a solvated energy, so a failure there means the
+                # optimization succeeded and the decomposition did not -- a
+                # different thing to chase, and worth separating in the record.
+                fail_reason: ExclusionReason = "optimization_failed"
                 try:
                     opt_geom, opt_energy, converged = driver.optimize(
                         conf.geometry,
@@ -98,6 +110,7 @@ def refine(
 
                     if solvent_model is not None:
                         # opt_energy includes solvation — decompose
+                        fail_reason = "gas_phase_sp_failed"
                         gas_energy = driver.single_point(
                             opt_geom,
                             cs.charge,
@@ -112,9 +125,49 @@ def refine(
                         conf.electronic_energy = opt_energy
                         conf.solvation_energy = None
 
+                    surviving.append(conf)
+                except Exception as e:
+                    # Geometry non-convergence does NOT arrive here: the driver
+                    # catches it and returns refinement_converged=False, keeping
+                    # the last-step geometry.  That conformer stays in the
+                    # ensemble, and rightly so -- an unminimized geometry sits
+                    # *above* its true minimum, so it is under-weighted, never
+                    # dominant.  What reaches this handler is SCF non-convergence
+                    # and genuine faults, where there is no energy at all.
+                    log.warning(
+                        f"  Refinement failed for conformer in microstate "
+                        f"{ms.tautomer_id[:8]}: {e}"
+                    )
+                    ms.excluded_conformers.append(
+                        ExcludedConformer(
+                            geometry=conf.geometry,
+                            stage="refinement",
+                            reason=fail_reason,
+                            detail=f"{type(e).__name__}: {e}",
+                            multiplicity=conf.multiplicity,
+                            refinement_converged=conf.refinement_converged,
+                        )
+                    )
+            ms.conformers = surviving
+
+        # Deduplicate before the Hessians, not after. Optimization routinely
+        # relaxes distinct sampled conformers onto the same DFT minimum, and
+        # onto mirror-image pairs; each of those would otherwise cost a second
+        # Hessian and then contribute twice to the partition function.
+        # The free energy used to pick each group's representative still holds
+        # sampling's xTB-geometry RRHO alongside the new DFT terms, which is
+        # fine: it only breaks ties between near-identical structures.
+        before, after = deduplicate_charge_state(cs)
+        if after < before:
+            log.info(f"  q={cs.charge}: {before} conformer(s) -> {after} distinct state(s)")
+
+        for ms in cs.microstates:
+            surviving = []
+            for conf in ms.conformers:
+                try:
                     if rrho_method == "xtb":
                         freqs = xtb_runner.frequencies(
-                            opt_geom,
+                            conf.geometry,
                             cs.charge,
                             solvent=xtb_rrho_solvent,
                             biased=True,
@@ -122,7 +175,7 @@ def refine(
                         )
                     else:  # "dft"
                         freqs = driver.frequencies(
-                            opt_geom,
+                            conf.geometry,
                             cs.charge,
                             method,
                             basis,
@@ -133,12 +186,31 @@ def refine(
                             memory_gb=memory_gb,
                         )
                     conf.rrho_correction = quasi_rrho_free_energy(freqs)
-
                     surviving.append(conf)
                 except Exception as e:
+                    # Previously the conformer was KEPT with rrho_correction
+                    # unset.  free_energy sums non-None components, so it became
+                    # electronic + solvation while every sibling included RRHO --
+                    # and RRHO runs 11-114 kcal/mol (median 76) in this batch, so
+                    # the conformer landed far below the ensemble's real ~6
+                    # kcal/mol spread, took essentially all the Boltzmann weight,
+                    # and the energy window evicted everything else.  A missing
+                    # component must never be silently comparable to a complete
+                    # one.
                     log.warning(
-                        f"  Refinement failed for conformer in microstate "
-                        f"{ms.tautomer_id[:8]}: {e}"
+                        f"  RRHO failed for conformer in microstate {ms.tautomer_id[:8]}: {e}"
+                    )
+                    ms.excluded_conformers.append(
+                        ExcludedConformer(
+                            geometry=conf.geometry,
+                            stage="refinement",
+                            reason="rrho_failed",
+                            detail=f"{type(e).__name__}: {e}",
+                            multiplicity=conf.multiplicity,
+                            electronic_energy=conf.electronic_energy,
+                            solvation_energy=conf.solvation_energy,
+                            refinement_converged=conf.refinement_converged,
+                        )
                     )
             ms.conformers = surviving
 

@@ -12,7 +12,7 @@ from types import ModuleType
 
 from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.ensemble import filter_charge_state_by_energy
-from qm_pka.types import Ensemble
+from qm_pka.types import Ensemble, ExcludedConformer
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,8 @@ def score(
 
     Any quasi-RRHO correction set during refinement is left untouched and
     contributes to the conformer free energy used for filtering and weighting.
+    So are the conformer multiplicities: scoring does not move geometries, so
+    the symmetry analysis from refinement still holds.
 
     Conformers that fail are dropped with a warning. After processing,
     conformers within each charge state are filtered by the energy window.
@@ -100,8 +102,27 @@ def score(
 
                     surviving.append(conf)
                 except Exception as e:
+                    # Includes the PCM cavity case: psi4_runner refuses to run a
+                    # solvated job when no tessera area yields a valid cavity,
+                    # rather than returning a converged but meaningless energy.
+                    # Scoring does not deduplicate, so this conformer may be a
+                    # representative standing for several collapsed structures;
+                    # multiplicity records how many states go with it.
                     log.warning(
                         f"  Scoring failed for conformer in microstate {ms.tautomer_id[:8]}: {e}"
+                    )
+                    ms.excluded_conformers.append(
+                        ExcludedConformer(
+                            geometry=conf.geometry,
+                            stage="scoring",
+                            reason="scoring_failed",
+                            detail=f"{type(e).__name__}: {e}",
+                            multiplicity=conf.multiplicity,
+                            electronic_energy=conf.electronic_energy,
+                            solvation_energy=conf.solvation_energy,
+                            rrho_correction=conf.rrho_correction,
+                            refinement_converged=conf.refinement_converged,
+                        )
                     )
             ms.conformers = surviving
 
@@ -111,19 +132,5 @@ def score(
             f"  q={cs.charge}: {len(cs.microstates)} microstate(s), "
             f"{n_conf} conformer(s) after filtering"
         )
-
-        # Detect sigma_rot per microstate using its lowest-energy conformer.
-        for ms in cs.microstates:
-            if not ms.conformers:
-                continue
-            lowest = min(ms.conformers, key=lambda c: c.free_energy)
-            try:
-                ms.symmetry_number = driver.rotational_symmetry_number(lowest.geometry)
-            except Exception as e:
-                log.warning(
-                    f"  sigma_rot detection failed for microstate "
-                    f"{ms.tautomer_id[:8]}: {e}; using sigma=1"
-                )
-                ms.symmetry_number = 1
 
     return ensemble

@@ -16,13 +16,15 @@ from __future__ import annotations
 import logging
 
 from qm_pka.charge_enumeration import enumerate_charge_state
+from qm_pka.conformer_symmetry import DEFAULT_ETHR as CREGEN_ETHR
+from qm_pka.conformer_symmetry import effective_energy_offset
 from qm_pka.crest_runner import (
     conformer_search,
     deprotonate,
     protonate,
     tautomerize,
 )
-from qm_pka.ensemble import HARTREE_TO_KCAL
+from qm_pka.ensemble import HARTREE_TO_KCAL, deduplicate_conformers
 from qm_pka.rdkit_utils import (
     canonical_smiles,
     enumerate_tautomers,
@@ -39,36 +41,83 @@ log = logging.getLogger(__name__)
 
 
 def _filter_by_energy_window(conformers: list[Conformer], ewin_kcal: float) -> list[Conformer]:
-    """Keep conformers within ewin kcal/mol of the lowest energy."""
+    """Keep conformers within ewin kcal/mol of the lowest effective energy.
+
+    The window is measured against ``G - RT ln(m)``, matching
+    `ensemble.filter_charge_state_by_energy`. A conformer standing for two
+    states contributes as though it were 0.41 kcal/mol lower, and must survive
+    the window on that basis or the sampling and refinement windows disagree
+    about the same structure.
+
+    `Microstate.includes_enantiomer` is deliberately not folded in here: it is
+    uniform across a microstate, and these conformers are all from one, so it
+    would shift every entry equally and cancel.
+    """
     if not conformers:
         return []
-    e_min = min(c.free_energy for c in conformers)
+    effective = [c.free_energy + effective_energy_offset(c.multiplicity) for c in conformers]
+    e_min = min(effective)
     ewin_hartree = ewin_kcal / HARTREE_TO_KCAL
-    return [c for c in conformers if (c.free_energy - e_min) <= ewin_hartree]
+    return [c for c, e in zip(conformers, effective, strict=True) if (e - e_min) <= ewin_hartree]
 
 
-def _add_rrho_and_filter(
+def _dedupe_add_rrho_and_filter(
     conformers: list[Conformer],
     charge: int,
     solvent: str | None,
     ewin_kcal: float,
+    includes_enantiomer: bool = False,
+    *,
     threads: int | None = None,
 ) -> list[Conformer]:
-    """Set the xTB quasi-RRHO correction on each conformer, then filter by the
-    energy window using the resulting free energy.
+    """Deduplicate, then set the xTB quasi-RRHO correction, then filter.
+
+    Deduplication comes first so no Hessian is spent on a structure that is
+    another one relabelled. CREGEN has already removed most of these, but not
+    the ones needing a relabelling it does not search.
+
+    The energy criterion is applied alongside the RMSD one here: CREST
+    geometries are not converged tightly enough for proximity alone to mean two
+    structures share a well.
 
     A plain numerical Hessian (``--hess``) is used: sampling geometries are xTB
-    minima (CREST-optimized), so no biasing is needed. Conformers whose Hessian
-    fails keep their electronic free energy only, with a warning. This is a
-    cheap pre-filter estimate; refinement recomputes RRHO on the DFT geometry.
+    minima (CREST-optimized), so no biasing is needed.
+
+    A conformer whose Hessian fails is carried through to refinement but takes
+    no part in the energy window. It cannot be *compared*: ``free_energy`` sums
+    non-None components, so without RRHO it is short a term worth 11-114
+    kcal/mol against an ensemble whose real spread is a few kcal/mol. Left in
+    the comparison it becomes ``e_min`` and the window evicts every genuine
+    conformer of the microstate -- one failed Hessian wiping out the whole
+    microstate before refinement ever sees it.
+
+    Excluding it outright would be too heavy here, unlike at refinement: this
+    RRHO is only a cheap pre-filter estimate and refinement recomputes it on the
+    DFT geometry, so the gap closes by itself. Passing it through does leave it
+    with ``rrho_correction=None`` during refinement's deduplication, which ranks
+    on ``free_energy`` and would favour it as representative -- harmless, since
+    that only picks between near-identical structures, and refinement either
+    recomputes its RRHO or excludes it.
     """
+    before = len(conformers)
+    conformers = deduplicate_conformers(conformers, includes_enantiomer, ethr_kcal=CREGEN_ETHR)
+    if len(conformers) < before:
+        log.info(f"    {before} conformer(s) -> {len(conformers)} distinct state(s)")
+    comparable: list[Conformer] = []
+    no_rrho: list[Conformer] = []
     for conf in conformers:
         try:
             freqs = frequencies(conf.geometry, charge=charge, solvent=solvent, threads=threads)
             conf.rrho_correction = quasi_rrho_free_energy(freqs)
+            comparable.append(conf)
         except Exception as e:
-            log.warning(f"    xTB RRHO failed for a conformer (charge {charge}): {e}")
-    return _filter_by_energy_window(conformers, ewin_kcal)
+            log.warning(
+                f"    xTB RRHO failed for a conformer (charge {charge}): {e}; "
+                f"carrying it to refinement but excluding it from the energy window"
+            )
+            no_rrho.append(conf)
+
+    return _filter_by_energy_window(comparable, ewin_kcal) + no_rrho
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +234,9 @@ def run_approach1(
                             solvation_energy=total - gas_phase if solvent is not None else None,
                         )
                     ]
-                conformers = _add_rrho_and_filter(conformers, q, solvent, ewin, threads)
+                conformers = _dedupe_add_rrho_and_filter(
+                    conformers, q, solvent, ewin, has_enant, threads=threads
+                )
                 microstates.append(
                     Microstate(
                         tautomer_id=smi,
@@ -350,7 +401,9 @@ def _run_crest_pipeline_for_stereoisomer(
                             solvation_energy=total - gas_phase if solvent is not None else None,
                         )
                     ]
-                conformers = _add_rrho_and_filter(conformers, q, solvent, ewin, threads)
+                conformers = _dedupe_add_rrho_and_filter(
+                    conformers, q, solvent, ewin, includes_enantiomer, threads=threads
+                )
                 microstates.append(
                     Microstate(
                         tautomer_id=fp,
