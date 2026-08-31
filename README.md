@@ -221,7 +221,17 @@ The set of things that look weird and aren't. Read before "fixing":
   basis gives the same verdict for ~1% of the cost. On failure it *searches*
   `_TESSERA_AREA_LADDER` rather than refining, because validity is not
   monotonic in area — observed invalid bands at 0.10–0.12 and 0.25–0.40, and
-  one molecule needed a **coarser** area than the 0.1 default. Not applied to
+  one molecule needed a **coarser** area than the 0.1 default. The ladder stops
+  at **0.15** on accuracy, not stability: a coarse cavity can pass both of
+  PCMSolver's checks and still integrate the surface badly, which would swap a
+  detectable failure for a silent one. Measured against the 0.1 default over 37
+  conformers (charges −2…+2, 4–19 atoms), the worst deviation is 0.10 kcal/mol
+  at area 0.15 but 0.24 at 0.18 and 0.40 at 0.30 — and it is overwhelmingly a
+  *cationic* effect, an order of magnitude worse at q=+1/+2 than for neutrals
+  and anions, since protonated species carry the most hydrogens and hydrogen
+  spheres get the fewest tesserae at a fixed area. Conformers with no valid
+  cavity at or below 0.15 are dropped rather than served from a coarser grid.
+  Not applied to
   PySCF: it discretizes with Lebedev grids plus a switching function rather
   than GePol tesserae, and showed no failure on any of the 941, nor under 20x
   grid degradation.
