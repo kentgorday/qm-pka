@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from qm_pka.ensemble import serialize_ensemble
+from qm_pka.ensemble import (
+    SCHEMA_VERSION,
+    load_ensemble,
+    schema_version,
+    serialize_ensemble,
+)
 from qm_pka.pipeline import _find_resume_point
 from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
@@ -58,3 +65,46 @@ class TestFindResumePoint:
         serialize_ensemble(_ensemble("CCO"), tmp_path / "refinement")
         assert _find_resume_point(tmp_path, "CCN") is None
         assert "but this config asks for" in caplog.text
+
+
+class TestSchemaVersionGate:
+    """A checkpoint predating a schema bump must not resume silently.
+
+    `load_ensemble` fills new fields with defaults so old files still read, but
+    resuming from one would reload every conformer at multiplicity 1.0 and
+    reproduce the old unweighted answer with no sign that anything was lost.
+    """
+
+    def _downgrade(self, path: Path) -> None:
+        """Rewrite a checkpoint as a pre-multiplicity one."""
+        raw = json.loads(path.read_text())
+        raw.pop("schema_version", None)
+        for cs in raw["charge_states"].values():
+            for ms in cs["microstates"]:
+                for conf in ms["conformers"]:
+                    conf.pop("multiplicity", None)
+        path.write_text(json.dumps(raw))
+
+    def test_current_schema_resumes(self, tmp_path: Path) -> None:
+        path = serialize_ensemble(_ensemble(), tmp_path / "refinement")
+        assert schema_version(path) == SCHEMA_VERSION
+        assert _find_resume_point(tmp_path, "CCO") is not None
+
+    def test_legacy_checkpoint_is_refused(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        path = serialize_ensemble(_ensemble(), tmp_path / "refinement")
+        self._downgrade(path)
+        assert schema_version(path) == 1
+        with caplog.at_level(logging.WARNING):
+            assert _find_resume_point(tmp_path, "CCO") is None
+        assert "schema v1" in caplog.text
+
+    def test_legacy_checkpoint_still_loads(self, tmp_path: Path) -> None:
+        """Refusing to resume is not the same as refusing to read."""
+        path = serialize_ensemble(_ensemble(), tmp_path / "refinement")
+        self._downgrade(path)
+        loaded = load_ensemble(path)
+        assert loaded.input_smiles == "CCO"
+        conf = loaded.charge_states[0].microstates[0].conformers[0]
+        assert conf.multiplicity == 1.0

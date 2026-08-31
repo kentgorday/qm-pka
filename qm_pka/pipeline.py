@@ -6,7 +6,13 @@ import logging
 from pathlib import Path
 
 from qm_pka.config import PkaConfig
-from qm_pka.ensemble import assign_weights, load_ensemble, serialize_ensemble
+from qm_pka.ensemble import (
+    SCHEMA_VERSION,
+    assign_weights,
+    load_ensemble,
+    schema_version,
+    serialize_ensemble,
+)
 from qm_pka.refinement import refine
 from qm_pka.sampling import run_approach1, run_approach2
 from qm_pka.scoring import score
@@ -23,7 +29,8 @@ _RESUMABLE_STAGES = ("refinement", "sampling")
 def _find_resume_point(output_dir: Path, smiles: str) -> tuple[Ensemble, str] | None:
     """Return (ensemble, stage_name) for the latest completed stage, or None.
 
-    Only ``input_smiles`` is validated.  A stage's ensemble.json records the
+    The schema version and ``input_smiles`` are validated.  A stage's
+    ensemble.json records the
     *sampling* settings (they are written once and carried forward unchanged),
     so nothing on disk says which method/basis produced refined geometries —
     resuming after editing [refinement] would silently mix levels of theory.
@@ -35,6 +42,15 @@ def _find_resume_point(output_dir: Path, smiles: str) -> tuple[Ensemble, str] | 
         path = output_dir / stage / "ensemble.json"
         if not path.exists():
             continue
+        found_version = schema_version(path)
+        if found_version < SCHEMA_VERSION:
+            log.warning(
+                f"Ignoring {path}: schema v{found_version}, this build writes "
+                f"v{SCHEMA_VERSION}. Resuming would reload every conformer at the "
+                f"default multiplicity of 1.0 and silently reproduce the old, "
+                f"unweighted answer. Rerun the stage instead."
+            )
+            return None
         ensemble = load_ensemble(path)
         if ensemble.input_smiles != smiles:
             log.warning(
