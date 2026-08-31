@@ -145,11 +145,44 @@ _PCM_RADII_SCALING = 1.2
 DEFAULT_TESSERA_AREA = 0.1
 
 # Areas to try when the default builds an invalid cavity.  Validity is NOT
-# monotonic in area: for one probed conformer the invalid bands were 0.10-0.12
-# and 0.25-0.40, with valid regions on both sides.  So this is a search, not a
-# descent.  Finer areas come first because they are the accurate direction --
-# coarser ones are a last resort that trade one discretization error for another.
-_TESSERA_AREA_LADDER = (0.07, 0.05, 0.03, 0.02, 0.16, 0.2, 0.5)
+# monotonic in area, and the bands differ per geometry: one conformer was
+# invalid over 0.10-0.12 and 0.25-0.40, another invalid everywhere EXCEPT
+# 0.25-0.40.  So this is a search, and it must not leave wide gaps.
+#
+# The ceiling is 0.15, set by measured *accuracy* rather than by whether the
+# cavity merely passes PCMSolver's validity checks -- a coarse tessellation can
+# be perfectly stable and still integrate the surface badly, which would trade
+# a detectable failure for a silent one.  Deviation from the 0.1 default at
+# wB97M-V/def2-QZVPPD, worst case over 37 conformers spanning charges -2..+2
+# and 4-19 atoms:
+#
+#     area   worst deviation   note
+#     0.12   0.044 kcal/mol    negligible
+#     0.15   0.101             ~0.07 pKa; the ceiling
+#     0.18   0.240             cliff
+#     0.20   0.259
+#     0.30   0.400
+#     0.40   0.399
+#
+# The error is overwhelmingly a *cationic* effect: roughly an order of magnitude
+# worse at q=+1/+2 than for neutrals and anions, which stay under 0.14 kcal/mol
+# even at 0.4.  Protonated species carry the most hydrogens, whose spheres are
+# the smallest and so receive the fewest tesserae at a fixed area.  Verified on
+# the seven worst cationic systems: worst deviation 0.101 at area 0.15 against
+# 0.240 at 0.18.
+#
+# Finer areas come first because finer is the accurate direction, but 0.03 and
+# 0.02 come last: probe cost scales as roughly area^-2.3 (measured 3s at 0.3,
+# 9s at 0.1, 29s at 0.05, 405s at 0.02), so putting them early makes a conformer
+# pay ~400s before reaching a ~7s rung that would have worked.
+_TESSERA_AREA_LADDER = (
+    0.07,
+    0.05,  # finer than default: most accurate, still cheap to probe
+    0.12,
+    0.15,  # coarser, but measured within ~0.1 kcal/mol; cheap
+    0.03,
+    0.02,  # last resort: accurate, but very expensive to probe
+)
 
 # PCMSolver validates the discretized cavity two ways and, in the build used
 # here, both fatal errors have been patched down to warnings on stderr while
