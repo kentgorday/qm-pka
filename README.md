@@ -46,6 +46,13 @@ matters most — DFT optimization relaxes a large fraction of distinct sampled
 conformers onto the same minimum. Scoring does not deduplicate, since it does
 not move geometries. See [docs/symmetry.md](docs/symmetry.md).
 
+Microstates in the RDKit-first path are identified by `protomer_key`, not by
+canonical SMILES. Two SMILES that describe one species with a delocalised charge
+written on different atoms — a 4-substituted imidazolium, an enolate — are
+otherwise computed twice and double-counted in the partition function. Radicals
+and multi-component inputs are rejected at entry rather than approximated. See
+[docs/protomer-identity.md](docs/protomer-identity.md).
+
 ## Data model
 
 Defined in `qm_pka/types.py`. This is the most reused mental model in the
@@ -158,7 +165,7 @@ Source under `qm_pka/`. One-liner per module:
 | `pyscf_runner.py`, `psi4_runner.py` | Backend implementations |
 | `crest_runner.py`, `xtb_runner.py` | CREST/xTB subprocess wrappers |
 | `charge_enumeration.py` | SMARTS-based BFS to enumerate charge states |
-| `rdkit_utils.py` | SMILES ↔ 3D, tautomer enumeration, canonicalization |
+| `rdkit_utils.py` | SMILES ↔ 3D, tautomer enumeration, protomer identity, input validation |
 | `stereo.py` | Stereoisomer enumeration + enantiomer dedup via mirror-SMILES |
 | `tautomer_dedup.py` | H-count-per-heavy-atom fingerprint (used by approach 2) |
 | `thermo.py` | Quasi-RRHO free energy (Grimme 2012) |

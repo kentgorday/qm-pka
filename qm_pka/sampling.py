@@ -27,9 +27,11 @@ from qm_pka.crest_runner import (
 from qm_pka.ensemble import HARTREE_TO_KCAL, deduplicate_conformers
 from qm_pka.rdkit_utils import (
     canonical_smiles,
+    deduplicate_protomers,
     enumerate_tautomers,
     get_formal_charge,
     smiles_to_3d,
+    validate_input_smiles,
 )
 from qm_pka.stereo import enumerate_and_deduplicate
 from qm_pka.tautomer_dedup import deduplicate_tautomers
@@ -142,6 +144,7 @@ def run_approach1(
 
     Returns an Ensemble with xTB-level energies (no weights assigned).
     """
+    validate_input_smiles(smiles)
     ref_charge = get_formal_charge(smiles)
     ref_smiles = canonical_smiles(smiles)
 
@@ -190,6 +193,18 @@ def run_approach1(
                 )
                 expanded.update(tau_list)
             species_at_q = expanded
+
+        # Tautomer enumeration and the charge-state BFS both emit species that
+        # differ only in which atom was chosen to carry a delocalised charge.
+        # Those are one microstate, and left alone they double-count a species
+        # and its entire conformer ensemble.
+        n_before = len(species_at_q)
+        species_at_q = set(deduplicate_protomers(sorted(species_at_q)))
+        if len(species_at_q) < n_before:
+            log.info(
+                f"  merged {n_before - len(species_at_q)} resonance-duplicate "
+                f"species at charge {q}"
+            )
 
         log.info(f"  {len(species_at_q)} unique tautomer(s) at charge {q}")
 
@@ -438,6 +453,7 @@ def run_approach2(
 
     Returns an Ensemble with xTB-level energies (no weights assigned).
     """
+    validate_input_smiles(smiles)
     log.info(f"Input: {smiles}")
     log.info(f"Charge range: {charge_range[0]} to {charge_range[1]}")
 
