@@ -3,6 +3,19 @@
 Design principle: keep SMARTS simple and general (match any heteroatom with
 the right H-count/charge), not substructure-specific. Generate more variants
 rather than fewer — downstream QM energetics filter unrealistic states.
+
+The table is closed under reversal: every deprotonation has a protonation that
+undoes it, so a species can be walked back to where it came from. Note that P is
+covered only as phosphine <-> phosphide; there is no phosphonium path in either
+direction, which is a coverage gap rather than an asymmetry.
+
+Both sides of every rule pin the hydrogen count *and* the formal charge. An
+RDKit product template inherits any property it does not state, so a product
+written ``[NH2:1]`` keeps the reactant's charge: ``[NH3+:1]>>[NH2:1]`` yields
+an [NH2+] whose net charge never reaches the target, and the rule silently
+never fires. Every rule that neutralises an ion has that shape, so leaving the
+charge implicit disables exactly the half of the table needed to walk a charged
+input back toward neutral.
 """
 
 from __future__ import annotations
@@ -10,53 +23,58 @@ from __future__ import annotations
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from qm_pka.rdkit_utils import canonical_smiles, get_formal_charge
+from qm_pka.rdkit_utils import (
+    canonical_smiles,
+    deduplicate_protomers,
+    get_formal_charge,
+)
 
 # Deprotonation reactions: remove one H from a heteroatom, decrease formal charge.
 # Each pattern is intentionally broad.
 _DEPROTONATION_SMARTS: list[str] = [
-    # Neutral heteroatoms with H -> anionic
-    "[NH:1]>>[N-:1]",
-    "[NH2:1]>>[NH-:1]",
-    "[NH3:1]>>[NH2-:1]",
-    "[OH:1]>>[O-:1]",
-    "[OH2:1]>>[OH-:1]",
-    "[SH:1]>>[S-:1]",
-    "[PH:1]>>[P-:1]",
-    # Cationic heteroatoms with H -> neutral
-    "[NH4+:1]>>[NH3:1]",
-    "[NH3+:1]>>[NH2:1]",
-    "[NH2+:1]>>[NH:1]",
-    "[NH+:1]>>[N:1]",
-    "[OH2+:1]>>[OH:1]",
-    "[OH+:1]>>[O:1]",
-    "[SH2+:1]>>[SH:1]",
-    "[SH+:1]>>[S:1]",
-    # Aromatic N with H
-    "[nH:1]>>[n-:1]",
-    "[nH+:1]>>[n:1]",
+    # Neutral heteroatom -> anion
+    "[N;H1;+0:1]>>[N;H0;-1:1]",
+    "[N;H2;+0:1]>>[N;H1;-1:1]",
+    "[N;H3;+0:1]>>[N;H2;-1:1]",
+    "[O;H1;+0:1]>>[O;H0;-1:1]",
+    "[O;H2;+0:1]>>[O;H1;-1:1]",
+    "[S;H1;+0:1]>>[S;H0;-1:1]",
+    "[P;H1;+0:1]>>[P;H0;-1:1]",
+    # Cation -> neutral
+    "[N;H4;+1:1]>>[N;H3;+0:1]",
+    "[N;H3;+1:1]>>[N;H2;+0:1]",
+    "[N;H2;+1:1]>>[N;H1;+0:1]",
+    "[N;H1;+1:1]>>[N;H0;+0:1]",
+    "[O;H2;+1:1]>>[O;H1;+0:1]",
+    "[O;H1;+1:1]>>[O;H0;+0:1]",
+    "[S;H2;+1:1]>>[S;H1;+0:1]",
+    "[S;H1;+1:1]>>[S;H0;+0:1]",
+    # Aromatic N
+    "[n;H1;+0:1]>>[n;H0;-1:1]",
+    "[n;H1;+1:1]>>[n;H0;+0:1]",
 ]
 
 # Protonation reactions: add one H to a heteroatom, increase formal charge.
 _PROTONATION_SMARTS: list[str] = [
-    # Neutral heteroatoms -> cationic
-    "[NH2:1]>>[NH3+:1]",
-    "[NH:1]>>[NH2+:1]",
-    "[N;H0;+0;X3:1]>>[NH+:1]",
-    "[OH:1]>>[OH2+:1]",
-    "[O;H0;+0:1]>>[OH+:1]",
-    "[SH:1]>>[SH2+:1]",
-    "[S;H0;+0:1]>>[SH+:1]",
-    # Anionic heteroatoms -> neutral
-    "[N-:1]>>[NH:1]",
-    "[NH-:1]>>[NH2:1]",
-    "[NH2-:1]>>[NH3:1]",
-    "[O-:1]>>[OH:1]",
-    "[OH-:1]>>[OH2:1]",
-    "[S-:1]>>[SH:1]",
+    # Neutral heteroatom -> cation
+    "[N;H2;+0:1]>>[N;H3;+1:1]",
+    "[N;H1;+0:1]>>[N;H2;+1:1]",
+    "[N;H0;+0;X3:1]>>[N;H1;+1:1]",
+    "[O;H1;+0:1]>>[O;H2;+1:1]",
+    "[O;H0;+0:1]>>[O;H1;+1:1]",
+    "[S;H1;+0:1]>>[S;H2;+1:1]",
+    "[S;H0;+0:1]>>[S;H1;+1:1]",
+    # Anion -> neutral
+    "[N;H0;-1:1]>>[N;H1;+0:1]",
+    "[N;H1;-1:1]>>[N;H2;+0:1]",
+    "[N;H2;-1:1]>>[N;H3;+0:1]",
+    "[O;H0;-1:1]>>[O;H1;+0:1]",
+    "[O;H1;-1:1]>>[O;H2;+0:1]",
+    "[S;H0;-1:1]>>[S;H1;+0:1]",
+    "[P;H0;-1:1]>>[P;H1;+0:1]",
     # Aromatic N
-    "[n;H0;+0:1]>>[nH+:1]",
-    "[n-:1]>>[nH:1]",
+    "[n;H0;+0:1]>>[n;H1;+1:1]",
+    "[n;H0;-1:1]>>[n;H1;+0:1]",
 ]
 
 
@@ -130,6 +148,9 @@ def _apply_reactions(
                     Chem.SanitizeMol(product)
                     charge = Chem.GetFormalCharge(product)
                     if charge != target_charge:
+                        # Also the backstop for a template that failed to adjust
+                        # the charge: such a product keeps the reactant's charge
+                        # and is rejected here before anything downstream sees it.
                         continue
                     can = Chem.MolToSmiles(product)
                     if can is not None and can not in seen:
@@ -142,13 +163,19 @@ def _apply_reactions(
 
 
 def enumerate_charge_state(smiles: str, target_charge: int) -> list[str]:
-    """BFS to enumerate all unique species at the target charge.
+    """BFS to enumerate the distinct species at the target charge.
 
-    Starting from the input SMILES, iteratively applies single protonation
-    or deprotonation steps until the target charge is reached. Returns all
-    unique canonical SMILES found at the target charge, or an empty list
-    if the target charge is unreachable from this input (e.g. asking for
-    q=-2 on a molecule with only one ionizable site).
+    Starting from the input SMILES, iteratively applies single protonation or
+    deprotonation steps until the target charge is reached.
+
+    Returns one canonical SMILES per *species*, not per Lewis structure: two
+    results that differ only in which atom was chosen to carry a delocalised
+    charge are collapsed by :func:`~qm_pka.rdkit_utils.deduplicate_protomers`,
+    since they describe one microstate. The representative is chosen
+    deterministically and does not depend on input order.
+
+    Returns an empty list if the target charge is unreachable from this input,
+    for example asking for q=-2 of a molecule with only one ionizable site.
     """
     current_charge = get_formal_charge(smiles)
     if current_charge == target_charge:
@@ -171,4 +198,6 @@ def enumerate_charge_state(smiles: str, target_charge: int) -> list[str]:
             return []
         current_level = next_level
 
-    return sorted(current_level)
+    # Collapse species that differ only in which atom the enumerator chose to
+    # carry a delocalised charge; they are one microstate.
+    return deduplicate_protomers(sorted(current_level))
