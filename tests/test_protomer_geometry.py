@@ -6,6 +6,7 @@ from typing import ClassVar
 
 import numpy as np
 import pytest
+from rdkit import Chem
 
 from qm_pka.ensemble import deduplicate_conformers
 from qm_pka.protomer_geometry import (
@@ -13,10 +14,10 @@ from qm_pka.protomer_geometry import (
     _specified_stereo,
     _stereo_signature,
     assign_protons,
+    match_to_candidate,
     protonation_key_from_geometry,
     protonation_key_from_mol,
     repair_migrated_conformers,
-    resolve_stereo_candidates,
     template_from_smiles,
 )
 from qm_pka.rdkit_utils import smiles_to_3d
@@ -511,20 +512,48 @@ class TestHydrogenCountsSurviveCanonicalisation:
         assert "[O]" in key, "carbonyl O must be bracketed or its H count is lost"
 
 
-class TestResolveStereoCandidates:
-    def test_identical_stereo_offers_nothing_to_decide(self) -> None:
-        geom, explicit = _embed("[NH3+]CC(=O)O")
-        template = template_from_smiles(explicit)
-        assignment = assign_protons(geom)
-        assert resolve_stereo_candidates(geom, assignment, template, [template, template]) == []
+class TestMatchToCandidate:
+    """Verification, not discrimination: does the geometry agree with *this* candidate."""
 
     def test_a_geometry_agrees_with_its_own_label(self) -> None:
-        geom, explicit = _embed(r"OC(=[OH+])/C=C\C(=O)O")
+        geom, explicit = _embed(r"OC(=[OH+])/C=C\\C(=O)O")
+        template = template_from_smiles(explicit)
+        assert (
+            match_to_candidate(
+                geom, assign_protons(geom), template, template, False, same_microstate=True
+            )
+            is not None
+        )
+
+    def test_a_geometry_is_rejected_by_the_wrong_diastereomer(self) -> None:
+        geom, explicit = _embed(r"OC(=[OH+])/C=C\\C(=O)O")
         cis = template_from_smiles(explicit)
         trans = template_from_smiles(smiles_to_3d(r"OC(=[OH+])/C=C/C(=O)O")[1])
         assignment = assign_protons(geom)
-        agreeing = resolve_stereo_candidates(geom, assignment, cis, [cis, trans])
-        assert agreeing == [0]
+        assert match_to_candidate(geom, assignment, cis, cis, False, same_microstate=True)
+        assert match_to_candidate(geom, assignment, cis, trans, False) is None
+
+    def test_a_candidate_specifying_no_stereo_cannot_be_contradicted(self) -> None:
+        geom, explicit = _embed("NCC(=O)O")
+        template = template_from_smiles(explicit)
+        assert (
+            match_to_candidate(
+                geom, assign_protons(geom), template, template, False, same_microstate=True
+            )
+            is not None
+        )
+
+    def test_the_mirror_is_accepted_only_for_a_collapsed_enantiomeric_pair(self) -> None:
+        """A microstate flagged `includes_enantiomer` stands for both mirror images."""
+        geom, explicit = _embed("N[C@@H](C)C(=O)O")
+        own = template_from_smiles(explicit)
+        mirror = template_from_smiles(smiles_to_3d("N[C@H](C)C(=O)O")[1])
+        assignment = assign_protons(geom)
+        # The geometry is its own label either way.
+        assert match_to_candidate(geom, assignment, own, own, False, same_microstate=True)
+        # Against the opposite configuration it depends on what the microstate means.
+        assert match_to_candidate(geom, assignment, own, mirror, False) is None
+        assert match_to_candidate(geom, assignment, own, mirror, True) is not None
 
 
 class TestRingStereoIsResolved:
@@ -545,24 +574,24 @@ class TestRingStereoIsResolved:
         trans = template_from_smiles(smiles_to_3d(self.TRANS)[1])
         assert protonation_key_from_mol(cis, -1) == protonation_key_from_mol(trans, -1)
 
-    def test_clearing_the_partner_would_collapse_the_two_diastereomers(self) -> None:
-        """Why non-decisive centres are neutralised rather than erased."""
+    def test_comparing_only_the_differing_atom_would_collapse_them(self) -> None:
+        """Why verification compares everything the candidate specifies.
+
+        A 1,4-ring cis/trans relationship is carried by a *pair* of atoms. Keep
+        only the one whose tag differs and RDKit drops it when writing the
+        SMILES -- a lone ring carbon has two identical branches -- so the two
+        diastereomers become the same string and nothing can be decided.
+        """
         cis = template_from_smiles(smiles_to_3d(self.CIS)[1])
         trans = template_from_smiles(smiles_to_3d(self.TRANS)[1])
         _, cis_atoms = _specified_stereo(cis)
         _, trans_atoms = _specified_stereo(trans)
         decisive = {k for k in cis_atoms if cis_atoms.get(k) != trans_atoms.get(k)}
-        others = set(cis_atoms) - decisive
         assert len(decisive) == 1, "cis and trans differ at exactly one ring carbon"
 
-        # Erasing the rest leaves a lone ring carbon with two identical branches,
-        # so RDKit drops the tag and the two diastereomers become the same string.
-        assert _stereo_signature(cis, set(), decisive, set()) == _stereo_signature(
-            trans, set(), decisive, set()
-        )
-        # Holding them at a common value keeps the pair, so the two stay apart.
-        assert _stereo_signature(cis, set(), decisive, others) != _stereo_signature(
-            trans, set(), decisive, others
+        assert _stereo_signature(cis, set(), decisive) == _stereo_signature(trans, set(), decisive)
+        assert _stereo_signature(cis, set(), set(cis_atoms)) != _stereo_signature(
+            trans, set(), set(trans_atoms)
         )
 
     def test_the_geometry_picks_the_right_diastereomer(self) -> None:
@@ -590,3 +619,124 @@ class TestRingStereoIsResolved:
         assert report.ambiguous == 0
         assert len(cis.conformers) == 1
         assert trans.conformers == []
+
+
+class TestStereoIsVerifiedNotAssumed:
+    """The branch that previously kept a conformer without looking at it."""
+
+    CIS: ClassVar[str] = r"OC(=[OH+])/C=C\C(=O)O"
+    TRANS: ClassVar[str] = r"OC(=[OH+])/C=C/C(=O)O"
+
+    def test_the_two_share_a_protonation_key(self) -> None:
+        cis = template_from_smiles(smiles_to_3d(self.CIS)[1])
+        trans = template_from_smiles(smiles_to_3d(self.TRANS)[1])
+        assert protonation_key_from_mol(cis, 1) == protonation_key_from_mol(trans, 1)
+
+    def test_a_flipped_double_bond_moves_to_its_sibling(self) -> None:
+        """The protonation never changed, so nothing before this looked at it."""
+        cis = _microstate(self.CIS)
+        trans = _microstate(self.TRANS, conformers=[])
+        # file the trans geometry under the cis microstate
+        cis.conformers[0].geometry = _embed(self.TRANS)[0]
+
+        cs = ChargeState(charge=1, microstates=[cis, trans])
+        report = repair_migrated_conformers(cs, stage="sampling")
+
+        assert report.moved == 1
+        assert cis.conformers == []
+        assert len(trans.conformers) == 1
+
+    def test_a_flipped_double_bond_with_no_sibling_is_kept_and_flagged(self) -> None:
+        """Not an exclusion: a centre sampling can flip was not stable to begin with."""
+        cis = _microstate(self.CIS)
+        cis.conformers[0].geometry = _embed(self.TRANS)[0]
+
+        cs = ChargeState(charge=1, microstates=[cis])
+        report = repair_migrated_conformers(cs, stage="sampling")
+
+        assert report.stereo_unmatched == 1
+        assert report.moved == 0
+        assert len(cis.conformers) == 1
+        assert cis.excluded_conformers == []
+
+
+class TestPseudoAsymmetry:
+    """Two ends of a molecule that only stereochemistry tells apart.
+
+    2,3,4-trihydroxyglutaric acid has a pseudo-asymmetric C3. Deprotonating
+    either end breaks the tie, giving two diastereomers that share a protonation
+    key -- so a proton moving from one end to the other is invisible to the key,
+    and the skeleton automorphism relating them is stereo-relevant.
+    """
+
+    E1: ClassVar[str] = "O=C([O-])[C@@H](O)[C@@H](O)[C@@H](O)C(=O)O"
+    E5: ClassVar[str] = "O=C(O)[C@@H](O)[C@@H](O)[C@@H](O)C(=O)[O-]"
+
+    def test_they_are_different_species_sharing_one_protonation_key(self) -> None:
+        t1 = template_from_smiles(smiles_to_3d(self.E1)[1])
+        t5 = template_from_smiles(smiles_to_3d(self.E5)[1])
+        assert protonation_key_from_mol(t1, -1) == protonation_key_from_mol(t5, -1)
+        assert Chem.MolToSmiles(t1) != Chem.MolToSmiles(t5)
+
+    @staticmethod
+    def _move_acid_proton(geom: Geometry) -> Geometry:
+        """Hand the carboxylic acid's proton to the carboxylate at the other end.
+
+        A migration keeps the microstate's atom ordering and moves coordinates,
+        which is what makes it invisible to the protonation key here.
+        """
+        symbols = list(geom.symbols)
+        oxygens = [i for i, s in enumerate(symbols) if s == "O"]
+        assignment = assign_protons(geom)
+        owner = dict(zip(geom.hydrogen_indices, assignment.owner, strict=True))
+
+        def near(i: int, j: int) -> bool:
+            return float(np.linalg.norm(geom.coords[i] - geom.coords[j])) < 1.7
+
+        carboxyl_o = [
+            o
+            for o in oxygens
+            if any(
+                symbols[c] == "C" and sum(1 for k in oxygens if near(k, c)) == 2
+                for c in range(len(symbols))
+                if symbols[c] == "C" and near(o, c)
+            )
+        ]
+        donor = next(o for o in carboxyl_o if any(owner.get(h) == o for h in owner))
+        acid_h = next(h for h, o in owner.items() if o == donor)
+        acceptor = max(
+            (o for o in carboxyl_o if o != donor and not any(owner.get(h) == o for h in owner)),
+            key=lambda o: float(np.linalg.norm(geom.coords[o] - geom.coords[donor])),
+        )
+        return _move_h(geom, acid_h, acceptor, dist=0.98)
+
+    def test_the_geometry_is_re_filed_rather_than_silently_kept(self) -> None:
+        source = _microstate(self.E1)
+        target = _microstate(self.E5, conformers=[])
+        source.conformers[0].geometry = self._move_acid_proton(source.conformers[0].geometry)
+
+        template = template_from_smiles(source.smiles or "")
+        moved = source.conformers[0].geometry
+        # the key cannot see this migration -- both ends give the same skeleton
+        assert protonation_key_from_geometry(moved, template, -1) == protonation_key_from_mol(
+            template, -1
+        )
+
+        cs = ChargeState(charge=-1, microstates=[source, target])
+        report = repair_migrated_conformers(cs, stage="refinement")
+
+        # Detected, but not resolved. Both candidates are satisfiable, because the
+        # skeleton's automorphism group is larger than the molecule's stereo
+        # automorphism group: the half-swap relating the two ends is a symmetry of
+        # the skeleton but not of the stereochemistry, and enumerating over it lets
+        # the wrong candidate be satisfied by a chemically invalid relabelling.
+        # Restricting to stereo-preserving automorphisms is circular. Both match
+        # on real evidence, so the tie stays visible rather than being resolved by
+        # preferring where the conformer started -- excluding is the safe outcome
+        # and a strict improvement on the silent misfiling this case got before
+        # stereo was verified at all.
+        assert report.ambiguous == 1
+        assert report.moved == 0
+        assert source.conformers == []
+        assert source.excluded_conformers[0].reason == "ambiguous_microstate"
+        assert target.conformers == []
