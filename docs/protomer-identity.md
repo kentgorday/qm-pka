@@ -242,6 +242,80 @@ shape, so leaving the charge implicit disables exactly the half of the table
 needed to walk a charged input back toward neutral — and, through
 `[nH:1]>>[n-:1]`, aromatic N–H deprotonation for neutral inputs too.
 
+## Known limitations, not yet acted on
+
+**A specified stereocentre that sampling flips.** Two situations differ, and only
+one is handled. Where a stereo element was *introduced* by the pipeline -- by
+tautomer enumeration, or created when protonation quaternises a nitrogen that
+was freely inverting -- both configurations are legitimate microstates and a
+conformer is filed under whichever it actually is. Where the element was
+specified *by the user* in the input SMILES, a conformer that comes back with
+the opposite configuration is not compliant with what was asked for, and
+arguably belongs in `excluded_conformers`.
+
+That exclusion is deliberately **not** implemented. If CREST's sampling flipped
+the centre, it is not configurationally stable, and rejecting conformers for
+failing to honour a claim the chemistry does not support is the wrong response
+-- the more useful reading is that the input over-specified. The two cases are
+distinguishable in code (a stereo element is user-specified if it appears in
+`Ensemble.input_smiles`, rather than arriving from `enumerate_and_deduplicate`),
+so the path stays open.
+
+TODO: decide whether to surface this at all, and if so whether as a warning
+against the input or as an exclusion. Revisit before trusting a run whose input
+carries hand-assigned stereochemistry.
+
+**E/Z isomerism in the CREST-first path.** Approach 2 identifies microstates by
+a geometric fingerprint, which cannot carry double-bond configuration without
+knowing that a bond is rigid, and rigidity is not recoverable from coordinates
+alone. Measured on the first training batch: among planar sp2-sp2 C-C bonds,
+103 of 610 visit both sides of the torsion *within one microstate* -- they are
+rotatable by construction -- and no bond-length threshold separates those from
+the rigid ones without either merging distinct species or splitting a third of
+affected microstates several ways. Settling it needs a set where the answer is
+known, not incidental sampling. Approach 2 therefore conflates E and Z isomers,
+as it always has; approach 1 does not.
+
+The descriptor itself is not the hard part: a torsion between index-picked
+substituents at two planar three-connected atoms, comparable across structures
+that share a heavy-atom order. Only the rigidity test was unresolved, and
+**Wiberg bond order settles it** where geometry could not. Measured with
+``xtb --gfn 2 --wbo`` over 158 planar sp2-sp2 C-C bonds in 55 microstates:
+
+    rotatable   p5 0.93   p25 1.01   median 1.05   p95 1.32-1.40
+    rigid       p5 1.08   p25 1.60   median 1.72   p95 1.85-1.88
+
+The *bulk* separation is large -- medians near 1.05 against 1.72, where bond
+length gave 1.465 against 1.378 with fully nested ranges. The tails do overlap
+(rotatable p95 exceeds rigid p5), so this is not a clean gap. But the overlap
+looks like contamination in the label rather than in the bond order: the nine
+"rigid" bonds falling below a 1.4 cut have median length 1.433 A, matching the
+rotatable population (1.469) rather than the rigid one (1.341). "Unimodal" only
+means the sampler never flipped that bond, so the torsion label is the noisier
+signal of the two.
+
+Two further measurements. A bond's WBO moves by about 0.07 across conformers of
+one species (median spread 0.068 gas, 0.058 ALPB), and 3-5% of bonds straddle a
+1.4 cut within their own conformers -- so rigidity must be assigned per
+*species*, from a consensus over its conformers, never per conformer. That
+resolves without circularity: group by the coarse hydrogen-count fingerprint
+first, which is stereo-blind and needs no bond orders, take the consensus within
+each group, then refine that group's fingerprint. Gas and ALPB(water) perform
+almost identically; nothing in the data chooses between them.
+
+TODO: four things before building it. (0) Settle the threshold on a set where
+the answer is known independently, not on incidental sampling: the two runs done
+so far disagree on rotatable p95 (1.32 against 1.40) at n=158 and n=39, which is
+too small to set a cut from. (1) Measure C-N and C-O, not just C-C;
+an amide C-N is rigid but may sit near the biaryl C-C range, which would force a
+per-element-pair cut. (2) Decide where the bond orders come from -- the natural
+shape is one ``xtb --sp --wbo`` per *microstate representative*, since rigidity
+is a property of the species rather than the conformer, with the rigid-bond set
+passed into the fingerprint so it stays a pure function of its arguments.
+(3) Note this makes the approach-2 identity depend on an xtb call and its
+parameterisation, which the approach-1 identity does not; the gap above is wide
+enough that version drift is unlikely to matter, but it is a real coupling.
+
 ## Unsupported inputs
 
 `validate_input_smiles` rejects two classes at the pipeline entry rather than
