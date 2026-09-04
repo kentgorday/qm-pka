@@ -20,7 +20,7 @@ from qm_pka.protomer_geometry import (
     repair_migrated_conformers,
     template_from_smiles,
 )
-from qm_pka.rdkit_utils import smiles_to_3d
+from qm_pka.rdkit_utils import canonical_smiles, smiles_to_3d
 from qm_pka.tautomer_dedup import geometric_fingerprint
 from qm_pka.types import ChargeState, Conformer, Geometry, Microstate
 
@@ -734,3 +734,35 @@ class TestPseudoAsymmetry:
         assert source.conformers == []
         assert source.excluded_conformers == []
         assert len(target.conformers) == 1
+
+
+class TestAnUndiscriminatedTie:
+    """Two microstates a skeleton automorphism makes interchangeable.
+
+    In `O=C(O)/C=C(/[O-])O` both terminal carbons are "two oxygens plus the
+    middle carbon", so the skeleton has an end-swapping automorphism that is not
+    a symmetry of the stereochemistry. E and Z share a hydrogen distribution, so
+    both atom correspondences are valid for both candidates and nothing here
+    separates them.
+    """
+
+    E: ClassVar[str] = r"O=C(O)/C=C(/[O-])O"
+    Z: ClassVar[str] = r"O=C(O)/C=C(\[O-])O"
+
+    def test_they_are_separate_microstates(self) -> None:
+        assert canonical_smiles(self.E) != canonical_smiles(self.Z)
+
+    def test_the_conformer_stays_where_it_is_rather_than_being_excluded(self) -> None:
+        """A failure to discriminate is not evidence of a change."""
+        source = _microstate(self.E)
+        other = _microstate(self.Z, conformers=[])
+
+        cs = ChargeState(charge=-1, microstates=[source, other])
+        report = repair_migrated_conformers(cs, stage="sampling")
+
+        assert report.unresolved_tie == 1
+        assert report.ambiguous == 0
+        assert report.moved == 0
+        assert len(source.conformers) == 1
+        assert source.excluded_conformers == []
+        assert other.conformers == []

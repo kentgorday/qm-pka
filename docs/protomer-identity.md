@@ -179,9 +179,22 @@ species; `multiplicity` records the size of the loss. Approach 2 has no such cas
 its microstates are *discovered* from the geometry, so an unseen identity opens
 a new microstate instead.
 
-**An ambiguous destination.** Several microstates share a protonation key and
-the geometry does not settle which -- see below. Rare: nothing in the first
-training batch reached this.
+**An ambiguous destination.** The geometry became one of several microstates,
+none of them the one it was filed under, and nothing separates them. Rare enough
+that nothing in the first training batch reached it.
+
+A tie that *includes* the microstate the conformer already sits in is not an
+exclusion: it is a failure to discriminate rather than evidence of a change, so
+the conformer stays. It costs nothing to leave it there -- the charge-state free
+energy sums flatly over microstates, so which one holds a conformer moves the
+answer only through `includes_enantiomer`. The usual cause is a skeleton
+automorphism that is not a symmetry of the stereochemistry: in
+`O=C(O)/C=C(/[O-])O` both terminal carbons are "two oxygens plus the middle
+carbon", so the ends are interchangeable to the skeleton though not to the
+molecule. Where the competing microstates also differ in hydrogen distribution
+the layout step rejects the wrong correspondence and this never arises; where
+they share one, as an E/Z pair does, nothing here can separate them. 31 of 6154
+conformers at sampling, concentrated in one molecule.
 
 ### Stereochemistry is a tie-break, not part of the key
 

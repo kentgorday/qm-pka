@@ -414,6 +414,7 @@ class MigrationReport:
     ambiguous: int = 0
     stereo_resolved: int = 0
     stereo_unmatched: int = 0
+    unresolved_tie: int = 0
     created: int = 0
     tightest_margin: float = float("inf")
 
@@ -719,13 +720,40 @@ def _repair_labelled(cs: ChargeState, stage: ExclusionStage) -> MigrationReport:
             if len(verified) == 1:
                 viable = verified
             elif not verified and len(viable) > 1 and any(entry[0] == pos for entry in viable):
+                # Nothing to discriminate: no candidate constrains any stereo, so
+                # all of them match trivially. Unremarkable, and staying put is
+                # right.
                 viable = [entry for entry in viable if entry[0] == pos]
+            elif len(verified) > 1 and any(entry[0] == pos for entry in verified):
+                # Several candidates are satisfiable and one of them is where the
+                # conformer already sits. That is a failure to discriminate, not
+                # evidence of a change, so it stays -- and it costs nothing to
+                # leave it: the charge-state free energy sums flatly over
+                # microstates, so which one holds a conformer moves the answer
+                # only through `includes_enantiomer`.
+                #
+                # The usual cause is a skeleton automorphism that is not a
+                # symmetry of the stereochemistry -- two ends of a molecule that
+                # only bond order distinguishes -- which admits both atom
+                # correspondences. Where the candidates also differ in hydrogen
+                # distribution the layout step rejects the wrong one and this
+                # never arises; where they share one, as an E/Z pair does,
+                # nothing here can separate them.
+                report.unresolved_tie += 1
+                log.warning(
+                    f"  q={cs.charge}: a conformer of {ms.tautomer_id[:32]} is satisfiable as "
+                    f"{len(viable)} microstates and cannot be told apart from where it already "
+                    f"is; keeping it there"
+                )
+                keep[pos].append(conf)
+                continue
 
             if len(viable) > 1:
                 report.ambiguous += 1
                 log.warning(
-                    f"  q={cs.charge}: a conformer of {ms.tautomer_id[:32]} matches "
-                    f"{len(viable)} microstates at this protonation; excluding it"
+                    f"  q={cs.charge}: a conformer of {ms.tautomer_id[:32]} became one of "
+                    f"{len(viable)} microstates, none of them the one it was filed under, and "
+                    f"cannot be told apart; excluding it"
                 )
                 _exclude(
                     ms,
