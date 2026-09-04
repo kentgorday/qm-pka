@@ -25,6 +25,7 @@ from qm_pka.crest_runner import (
     tautomerize,
 )
 from qm_pka.ensemble import HARTREE_TO_KCAL, deduplicate_conformers
+from qm_pka.protomer_geometry import repair_migrated_conformers
 from qm_pka.rdkit_utils import (
     canonical_smiles,
     deduplicate_protomers,
@@ -249,9 +250,6 @@ def run_approach1(
                             solvation_energy=total - gas_phase if solvent is not None else None,
                         )
                     ]
-                conformers = _dedupe_add_rrho_and_filter(
-                    conformers, q, solvent, ewin, has_enant, threads=threads
-                )
                 microstates.append(
                     Microstate(
                         tautomer_id=smi,
@@ -264,7 +262,34 @@ def run_approach1(
                 log.warning(f"    Failed for {smi}: {e}")
                 continue
 
-        ensemble.charge_states[q] = ChargeState(charge=q, microstates=microstates)
+        cs = ChargeState(charge=q, microstates=microstates)
+
+        # Re-file before deduplicating, for the same reason deduplication
+        # precedes the Hessians: a conformer whose proton moved during the CREST
+        # optimization is another microstate's structure under the wrong label,
+        # and moving it first lets it collapse against that microstate's own
+        # conformers rather than buying a Hessian -- and later a DFT
+        # optimization -- for a duplicate.
+        report = repair_migrated_conformers(cs, stage="sampling")
+        if report.touched:
+            log.info(
+                f"  q={q}: {report.moved} conformer(s) re-filed after a proton moved"
+                f"{f', {report.detached} with a detached H' if report.detached else ''}"
+                f"{f', {report.unmatched} matching no microstate' if report.unmatched else ''}"
+                f"{f', {report.ambiguous} ambiguous' if report.ambiguous else ''}"
+            )
+
+        for ms in cs.microstates:
+            try:
+                ms.conformers = _dedupe_add_rrho_and_filter(
+                    ms.conformers, q, solvent, ewin, ms.includes_enantiomer, threads=threads
+                )
+            except Exception as e:
+                log.warning(f"    Failed for {ms.tautomer_id}: {e}")
+                ms.conformers = []
+        cs.microstates = [ms for ms in cs.microstates if ms.conformers or ms.excluded_conformers]
+
+        ensemble.charge_states[q] = cs
 
     return ensemble
 
@@ -416,9 +441,6 @@ def _run_crest_pipeline_for_stereoisomer(
                             solvation_energy=total - gas_phase if solvent is not None else None,
                         )
                     ]
-                conformers = _dedupe_add_rrho_and_filter(
-                    conformers, q, solvent, ewin, includes_enantiomer, threads=threads
-                )
                 microstates.append(
                     Microstate(
                         tautomer_id=fp,
@@ -430,7 +452,30 @@ def _run_crest_pipeline_for_stereoisomer(
                 log.warning(f"      Failed for tautomer {fp[:8]}: {e}")
                 continue
 
-        result[q] = microstates
+        # The conformer search can move a proton just as the charge-state walk
+        # can, and a structure that came back a different tautomer is filed
+        # under this fingerprint until something checks. Re-file before
+        # deduplicating so it collapses against its real siblings rather than
+        # buying a Hessian here and a DFT optimization later.
+        cs = ChargeState(charge=q, microstates=microstates)
+        report = repair_migrated_conformers(cs, stage="sampling")
+        if report.touched:
+            log.info(
+                f"    q={q}: {report.moved} conformer(s) re-filed after a proton moved"
+                f"{f', {report.created} new tautomer(s) opened' if report.created else ''}"
+                f"{f', {report.detached} with a detached H' if report.detached else ''}"
+            )
+
+        for ms in cs.microstates:
+            try:
+                ms.conformers = _dedupe_add_rrho_and_filter(
+                    ms.conformers, q, solvent, ewin, ms.includes_enantiomer, threads=threads
+                )
+            except Exception as e:
+                log.warning(f"      Failed for tautomer {ms.tautomer_id[:8]}: {e}")
+                ms.conformers = []
+
+        result[q] = [ms for ms in cs.microstates if ms.conformers or ms.excluded_conformers]
 
     return result
 

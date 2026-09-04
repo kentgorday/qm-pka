@@ -12,6 +12,7 @@ from types import ModuleType
 from qm_pka import xtb_runner
 from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.ensemble import deduplicate_charge_state, filter_charge_state_by_energy
+from qm_pka.protomer_geometry import repair_migrated_conformers
 from qm_pka.thermo import quasi_rrho_free_energy
 from qm_pka.types import Ensemble, ExcludedConformer, ExclusionReason
 
@@ -149,6 +150,18 @@ def refine(
                         )
                     )
             ms.conformers = surviving
+
+        # Re-file conformers whose proton moved during the DFT optimization
+        # before deduplicating, so a migrated conformer is compared against the
+        # microstate it now belongs to rather than the one it started in.
+        report = repair_migrated_conformers(cs, stage="refinement")
+        if report.touched:
+            log.info(
+                f"  q={cs.charge}: {report.moved} conformer(s) re-filed after a proton moved"
+                f"{f', {report.detached} with a detached H' if report.detached else ''}"
+                f"{f', {report.unmatched} matching no microstate' if report.unmatched else ''}"
+                f"{f', {report.ambiguous} ambiguous' if report.ambiguous else ''}"
+            )
 
         # Deduplicate before the Hessians, not after. Optimization routinely
         # relaxes distinct sampled conformers onto the same DFT minimum, and

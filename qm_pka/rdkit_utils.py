@@ -14,6 +14,35 @@ from qm_pka.types import Geometry
 log = logging.getLogger(__name__)
 
 
+def frame_atom_order(mol: Chem.Mol) -> list[int]:
+    """Heavy-atom indices of ``mol`` in canonical order of its bare frame.
+
+    The *frame* is the heavy-atom graph with hydrogen counts, formal charges,
+    bond orders, aromaticity and stereo all erased -- so it is byte-identical
+    for every protomer and every tautomer of one molecule, and canonically
+    ranking it labels the heavy atoms in a way none of them disagree about.
+
+    `_skeleton` cannot serve here: it pins hydrogen counts, which is exactly
+    what distinguishes two protomers, so its ranking differs between them.
+    """
+    rw = Chem.RWMol(mol)
+    for atom in rw.GetAtoms():
+        atom.SetNumExplicitHs(0)
+        atom.SetNoImplicit(True)
+        atom.SetFormalCharge(0)
+        atom.SetIsAromatic(False)
+        atom.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
+        atom.SetAtomMapNum(0)
+    for bond in rw.GetBonds():
+        bond.SetBondType(Chem.BondType.SINGLE)
+        bond.SetIsAromatic(False)
+        bond.SetStereo(Chem.BondStereo.STEREONONE)
+    frame = rw.GetMol()
+    Chem.SanitizeMol(frame, _SKELETON_SANITIZE)
+    ranks = list(Chem.CanonicalRankAtoms(frame))
+    return sorted(range(mol.GetNumAtoms()), key=lambda i: ranks[i])
+
+
 def smiles_to_3d(smiles: str) -> tuple[Geometry, str]:
     """Generate a 3D geometry from a SMILES string via ETKDG embedding.
 
@@ -21,10 +50,21 @@ def smiles_to_3d(smiles: str) -> tuple[Geometry, str]:
     ordering matches the SMILES atom ordering. Coordinates are reordered
     using _smilesAtomOutputOrder so that geometry index i corresponds
     to SMILES atom i.
+
+    Heavy atoms are put in `frame_atom_order` before anything else, which makes
+    every protomer of one molecule agree on their order. Without it each
+    microstate inherits the canonical order of its *own* SMILES -- and those
+    diverge, because RDKit's canonical ranking depends on formal charge and
+    hydrogen count. A conformer whose proton migrates then cannot be re-filed
+    under the microstate it became without solving an atom correspondence
+    problem first; see `qm_pka.protomer_geometry`. Hydrogens still interleave
+    differently between protomers, since SMILES writes each one attached to its
+    heavy atom, but that reordering is a regrouping rather than a mapping.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError(f"RDKit could not parse SMILES: {smiles}")
+    mol = Chem.RenumberAtoms(mol, frame_atom_order(mol))
     mol = Chem.AddHs(mol)
     status = AllChem.EmbedMolecule(mol, AllChem.ETKDGv3())
     if status != 0:
@@ -33,7 +73,7 @@ def smiles_to_3d(smiles: str) -> tuple[Geometry, str]:
     conf = mol.GetConformer()
     all_coords = np.array(conf.GetPositions(), dtype=np.float64)
 
-    explicit_h_smiles: str | None = Chem.MolToSmiles(mol)
+    explicit_h_smiles: str | None = Chem.MolToSmiles(mol, canonical=False)
     if explicit_h_smiles is None:
         raise RuntimeError(f"Failed to generate explicit-H SMILES for: {smiles}")
 
@@ -135,6 +175,16 @@ def get_formal_charge(smiles: str) -> int:
 # bonds have all been reduced to single is deliberately not a valid Lewis
 # structure. Ring perception and canonical ranking, which are what we need from
 # it, do not care.
+# Skip valence checking: a skeleton with every bond reduced to single and every
+# charge zeroed is not a valid molecule, and does not need to be.
+#
+# SANITIZE_FINDRADICALS must stay enabled, counter-intuitive as that is on a
+# graph whose valences are deliberately wrong. The deficiency we create is read
+# as unpaired electrons, and the resulting radical count is what forces RDKit to
+# bracket an atom -- `[O]` rather than `O` -- which is the only thing preserving
+# its hydrogen count through canonicalisation. Without it acetic acid and
+# ethane-1,1-diol both canonicalise to `CC(O)O`, and the key silently merges
+# species with different molecular formulas. See tests/test_rdkit_utils.py.
 _SKELETON_SANITIZE = Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES
 
 _UNSPECIFIED_STEREO = (Chem.BondStereo.STEREONONE, Chem.BondStereo.STEREOANY)

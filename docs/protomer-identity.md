@@ -96,6 +96,141 @@ The CREST-first path needs none of this. It identifies microstates by
 geometry — which contains no charges and no bond orders, so two resonance forms
 produce the same fingerprint by construction.
 
+## When a proton moves during minimisation
+
+The key above identifies a species from a SMILES. `qm_pka/protomer_geometry.py`
+identifies one from *coordinates*, which is what catches a conformer whose proton
+migrated between heavy atoms while xTB or DFT was minimising it. It is not rare:
+across the first training batch about a quarter of conformers at both stages were
+filed under a protomer their geometry no longer matched, and nothing detected it.
+A protonated carboxylic acid handing its proton to a free amine is the typical
+case, and the resulting ammonium/acid form is the obviously correct structure --
+the enumerated label was the absurd one.
+
+Ownership is decided by **nearest heavy atom, with no distance cutoff**. That is
+enough because it is a deterministic function of the coordinates, and because
+where a proton is genuinely shared the two candidates are chemically alike: when
+they are alike by automorphism -- the two oxygens of a carboxylate, the two ends
+of maleate -- canonicalising the skeleton absorbs the choice and both assignments
+name the same species. Where they are inequivalent the choice is arbitrary and is
+left so: `charge_state_free_energy` sums flatly over every conformer of every
+microstate, so which microstate holds a conformer moves the answer only through
+`includes_enantiomer`, at most kT ln 2 = 0.41 kcal/mol. The margin between first
+and second nearest heavy atom is recorded for diagnosis but nothing branches on
+it, so there is no threshold to tune.
+
+Repair runs before deduplication at both stages, for the same reason
+deduplication precedes the Hessians: a migrated conformer is another microstate's
+structure under the wrong label, and re-filing it first lets it collapse against
+that microstate's own conformers instead of buying a Hessian, and later a DFT
+optimization, for a duplicate.
+
+### Why every protomer shares a heavy-atom order
+
+`rdkit_utils.frame_atom_order` ranks heavy atoms canonically on the *frame* --
+the heavy-atom graph with hydrogen counts, charges, bond orders, aromaticity and
+stereo all erased -- which is byte-identical for every protomer of a molecule.
+`smiles_to_3d` embeds in that order. Without it each microstate inherits the
+canonical order of its own SMILES, and those diverge, because RDKit's canonical
+ranking depends on formal charge and hydrogen count; re-filing a conformer would
+then require discovering an atom correspondence first. Hydrogens still interleave
+differently, since SMILES writes each one attached to its heavy atom, so a moved
+conformer's hydrogens are regrouped -- through the *H-pinned* skeleton's ranking,
+which is what decides which automorphic site the proton sits on.
+
+### What is not repaired
+
+Three outcomes end in `excluded_conformers` rather than being dropped, so a run
+records what it computed and could not place:
+
+**A detached hydrogen.** The energy is real but belongs to a fragmented species.
+Two conformers in the first batch had hydrogens 5-6 A from every heavy atom, both
+carrying Boltzmann weight 1.0.
+
+**No matching microstate.** Approach 1's microstate set is *prescribed* by the
+enumerator, and a geometry outside it cannot be labelled without perceiving bond
+orders from coordinates. C-protonated arenium is the observed case. Unlike every
+other exclusion in the pipeline this one discards a valid energy for a real
+species; `multiplicity` records the size of the loss. Approach 2 has no such case:
+its microstates are *discovered* from the hydrogen distribution, so an unseen
+distribution opens a new microstate instead.
+
+**An ambiguous destination.** Several microstates share a protonation key and
+the geometry does not settle which -- see below. Rare: nothing in the first
+training batch reached this.
+
+### Stereochemistry is a tie-break, not part of the key
+
+The skeleton cannot hold stereo. Every bond is single, so a double bond has no
+configuration to annotate, and erasing charge and bond order can remove a
+stereocentre outright by making two substituents identical -- which is the same
+erasure that merges resonance forms, working as intended:
+
+```
+C[C@@H](C(=O)O)C(=O)[O-]     real stereo elements 1, skeleton 0
+C[C@H](/C=C/C)/C=C\C         real stereo elements 3, skeleton 0
+```
+
+`protomer_key` handles this by appending CIP labels taken from the real molecule
+and keyed by skeleton rank. That works because it only ever compares *resonance
+forms*, which have identical hydrogen counts and therefore identical skeletons,
+so the ranks mean the same thing on both sides.
+
+The geometry path cannot do the same. It compares *different protomers*, whose
+skeletons differ, so skeleton ranks are not comparable between them -- and there
+is no CIP descriptor to read from bare coordinates in any case. So stereo stays
+out of the protonation key and is applied only when the key leaves several
+candidates, by `resolve_stereo_candidates`: impose each candidate's bond orders
+on the coordinates, ask `AssignStereochemistryFrom3D` what configuration they
+show, and keep the candidate that agrees with itself. Each hypothesis is tested
+on its own bond orders, so the migration having invalidated the *source's* bond
+orders does not matter.
+
+Which stereo elements enter that comparison is the whole difficulty. Three
+treatments, and each is load-bearing:
+
+**Decisive** -- the elements the candidates disagree on. Real values kept; these
+are what answer the question.
+
+**Non-discriminating** -- elements every candidate specifies identically. They
+cannot tell the candidates apart, and comparing them actively harms, in two ways.
+A microstate that stands for a collapsed enantiomeric pair
+(`includes_enantiomer`) writes one configuration but means both, so the geometry
+may legitimately show the other. And a migration can *create* a stereocentre:
+`N/C(=C/C(F)(F)F)C([OH2+])[OH2+]` has two identical substituents on that carbon,
+so it is not a centre until a proton leaves, and the source geometry never had an
+opinion about it. Demanding a match there rejects every candidate.
+
+Erasing them is the obvious move and it is wrong. A 1,4-ring carbon has two
+constitutionally identical branches, so it is a stereocentre only *relative to
+its partner*; erase the partner and RDKit drops the surviving tag when writing
+the SMILES, leaving cis and trans byte-identical. So they are **neutralised** --
+both sides forced to one arbitrary common tag -- which cancels them from the
+comparison while keeping the pair writable.
+
+**Everything else** -- erased, because `AssignStereochemistryFrom3D` annotates
+whatever the coordinates support, including bonds no label constrains: a
+protonated carbonyl is a stereogenic double bond, and it would match nothing.
+
+One filter applies to the decisive bonds too: a bond that is *single* under a
+given candidate's bond orders is free to rotate and cannot testify, so it is
+dropped from that candidate's comparison rather than scored as a mismatch.
+
+Ring cis/trans is worth calling out because it is not a classical stereocentre,
+yet the two diastereomers have identical hydrogen counts and therefore share a
+protonation key. Only this tie-break tells them apart. Note also that the *frame*
+used for atom ordering erases hydrogen counts as well, so it cannot distinguish a
+saturated ring from an aromatic one at all -- harmless, since every protomer
+shares the frame and so shares its tie-break, but the H-pinned skeleton is what
+keeps such branches apart for identity.
+
+Deriving bond orders from the geometry instead, by searching for a resonance
+structure that accommodates the observed hydrogen pattern, would be a much larger
+problem than this one: the enumerator has already produced the candidate Lewis
+structures, so the task is to choose from a known list rather than to construct
+one. It would only help for **no matching microstate**, where the species is
+outside the model anyway.
+
 ## Enumeration rules
 
 Every rule in `charge_enumeration.py` pins the hydrogen count *and* the formal
