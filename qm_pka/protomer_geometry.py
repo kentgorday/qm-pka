@@ -346,7 +346,6 @@ def match_to_candidate(
     source_template: Chem.Mol,
     candidate_template: Chem.Mol,
     includes_enantiomer: bool,
-    same_microstate: bool = False,
 ) -> tuple[Geometry, bool] | None:
     """Is this geometry the candidate? If so, in the candidate's atom order.
 
@@ -371,17 +370,18 @@ def match_to_candidate(
     cannot testify.
 
     When the microstate stands for a collapsed enantiomeric pair the mirror image
-    is accepted too, because that is what the microstate means. Verifying against
-    the conformer's own microstate needs no reordering at all -- the geometry is
-    already in that order -- so ``same_microstate`` takes the exact path with no
-    automorphism choice to make.
+    is accepted too, because that is what the microstate means.
+
+    The conformer's own microstate is not special-cased, tempting as it is: the
+    geometry is in that microstate's atom order, but its protonation key matched
+    only up to automorphism, so the hydrogens can sit on symmetry-related
+    positions the template does not use. Skipping the layout step there let a
+    geometry verify against a template whose hydrogen distribution it did not
+    actually have -- the stereocentres elsewhere in the molecule matched, and
+    nothing checked the rest.
     """
     specified_bonds, specified_atoms = _specified_stereo(candidate_template)
-    candidates_layouts = (
-        [geom]
-        if same_microstate
-        else _layouts_for_target(geom, assignment, source_template, candidate_template)
-    )
+    candidates_layouts = _layouts_for_target(geom, assignment, source_template, candidate_template)
     if not specified_bonds and not specified_atoms:
         return (candidates_layouts[0], False) if candidates_layouts else None
 
@@ -703,7 +703,6 @@ def _repair_labelled(cs: ChargeState, stage: ExclusionStage) -> MigrationReport:
                     templates[pos],
                     templates[candidate],
                     cs.microstates[candidate].includes_enantiomer,
-                    same_microstate=(candidate == pos),
                 )
                 if matched is not None:
                     viable.append((candidate, matched[0], matched[1]))
