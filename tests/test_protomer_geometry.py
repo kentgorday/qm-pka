@@ -21,7 +21,7 @@ from qm_pka.protomer_geometry import (
     template_from_smiles,
 )
 from qm_pka.rdkit_utils import smiles_to_3d
-from qm_pka.tautomer_dedup import h_assignment_fingerprint
+from qm_pka.tautomer_dedup import geometric_fingerprint
 from qm_pka.types import ChargeState, Conformer, Geometry, Microstate
 
 
@@ -288,7 +288,7 @@ class TestRepairMigratedConformers:
 def _unlabelled(geom: Geometry, includes_enantiomer: bool = False) -> Microstate:
     """An approach-2 microstate: identified by its H distribution, with no SMILES."""
     return Microstate(
-        tautomer_id=h_assignment_fingerprint(geom),
+        tautomer_id=geometric_fingerprint(geom),
         conformers=[Conformer(geometry=geom)],
         smiles=None,
         includes_enantiomer=includes_enantiomer,
@@ -325,7 +325,7 @@ class TestRepairWithoutSmilesLabels:
         opened = cs.microstates[1]
         assert len(opened.conformers) == 1
         assert opened.smiles is None
-        assert opened.tautomer_id == h_assignment_fingerprint(opened.conformers[0].geometry)
+        assert opened.tautomer_id == geometric_fingerprint(opened.conformers[0].geometry)
         assert opened.includes_enantiomer is True
 
     def test_a_migration_to_a_sampled_position_moves_rather_than_creates(self) -> None:

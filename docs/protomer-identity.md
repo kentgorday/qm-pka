@@ -92,9 +92,33 @@ from standing in for acetic acid), then the most perceivable stereo elements
 stereogenic bond the other hides), then canonical SMILES for determinism.
 
 The CREST-first path needs none of this. It identifies microstates by
-`h_assignment_fingerprint` — hydrogen count per heavy atom, read off the
-geometry — which contains no charges and no bond orders, so two resonance forms
-produce the same fingerprint by construction.
+`geometric_fingerprint` -- hydrogen count per heavy atom plus tetrahedral
+configuration, both read off the geometry -- which contains no charges and no
+bond orders, so two resonance forms produce the same fingerprint by
+construction.
+
+Configuration is there because protonation creates and destroys stereocentres.
+A tertiary amine inverts freely and is not a stereocentre; protonating it
+quaternises the nitrogen, which cannot invert without breaking a bond, so the
+two faces become distinct species. With a second stereocentre present they are
+diastereomers rather than enantiomers, and a hydrogen-count fingerprint cannot
+tell them apart.
+
+Parity is recorded at heavy atoms with four connections and **at most one
+hydrogen**, with neighbours ordered `(is_hydrogen, position)`. That gate admits
+the ordinary carbon stereocentre -- three heavy neighbours and one hydrogen,
+which any rule counting heavy neighbours alone would miss -- and the 1,4-ring
+carbon, whose two ring branches are constitutionally identical so that no
+constitutional refinement can separate cis from trans: the configuration lives
+in the *pair*, and a parity at each captures it. It excludes atoms carrying two
+or more hydrogens, where the hydrogens are interchangeable and their ordering is
+not stable across CREST outputs -- the only case that could flip for no chemical
+reason. Recording a parity at an atom that is not a stereocentre is harmless: it
+is a constant for that species and never splits anything.
+
+Everything on this path is indexed by heavy-atom position, so structures must
+share a heavy-atom order. `heavy_frameworks_agree` checks the connectivity, not
+just the element sequence -- two different orderings can share one sequence.
 
 ## When a proton moves during minimisation
 
@@ -152,8 +176,8 @@ enumerator, and a geometry outside it cannot be labelled without perceiving bond
 orders from coordinates. C-protonated arenium is the observed case. Unlike every
 other exclusion in the pipeline this one discards a valid energy for a real
 species; `multiplicity` records the size of the loss. Approach 2 has no such case:
-its microstates are *discovered* from the hydrogen distribution, so an unseen
-distribution opens a new microstate instead.
+its microstates are *discovered* from the geometry, so an unseen identity opens
+a new microstate instead.
 
 **An ambiguous destination.** Several microstates share a protonation key and
 the geometry does not settle which -- see below. Rare: nothing in the first
@@ -241,6 +265,21 @@ target, and the rule never fires. Every rule that neutralizes an ion has that
 shape, so leaving the charge implicit disables exactly the half of the table
 needed to walk a charged input back toward neutral — and, through
 `[nH:1]>>[n-:1]`, aromatic N–H deprotonation for neutral inputs too.
+
+### Pooling across stereoisomers
+
+Approach 2 walks each input stereoisomer separately, because CREST's protonation
+operations do not preserve configuration: `--deprotonate` removes the hydrogen
+from a quaternised nitrogen, at which point the centre ceases to exist and the
+amine inverts freely, and `--protonate` rebuilds it on whichever face the physics
+picks. A run cannot be assumed to stay in the lane it started in.
+
+Two runs therefore explore overlapping ground, and a shared `tautomer_id` used to
+mean "reached twice, keep the better sampling" -- which silently deleted an
+entire microstate whenever it instead meant "two diastereomers the identity could
+not tell apart". Now that the identity carries configuration, a collision means
+one species: the conformers are pooled and deduplication collapses whatever the
+two runs found in common.
 
 ## Known limitations, not yet acted on
 

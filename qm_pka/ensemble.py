@@ -30,12 +30,15 @@ HARTREE_TO_KCAL = 627.5094740631
 # Bumped when a change makes an older ensemble.json unsafe to resume from.
 # 1 -> 2: conformers carry a `multiplicity`; without it every conformer reloads
 # at 1.0 and the run silently reproduces the old unweighted answer.
+# 3 -> 4: the CREST-first identity carries tetrahedral configuration as well as
+# hydrogen counts, so `tautomer_id` values written by an older build mean
+# something narrower and cannot be compared with ones written now.
 # 2 -> 3: heavy atoms are embedded in `rdkit_utils.frame_atom_order`, so every
 # microstate of a molecule shares one heavy-atom order. Older files predate it,
 # and the proton-migration repair refuses to move a conformer between two
 # microstates that disagree about that order -- so resuming would silently skip
 # the re-filing the stage exists to do.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def boltzmann_weights(
