@@ -3,7 +3,9 @@ import pytest
 
 from qm_pka.tautomer_dedup import (
     assign_hydrogens,
+    assign_protons,
     deduplicate_tautomers,
+    fingerprint_counts,
     h_assignment_fingerprint,
     validate_heavy_atom_ordering,
 )
@@ -124,3 +126,43 @@ class TestValidateHeavyAtomOrdering:
             coords=g1.coords,
         )
         assert not validate_heavy_atom_ordering(g1, g2)
+
+
+class TestOneAssignmentPrimitive:
+    """The approach-2 fingerprint and the migration check must not drift apart.
+
+    `tautomer_id` is written at sampling and read back by
+    `protomer_geometry.repair_migrated_conformers`. A second implementation of
+    "which heavy atom owns this hydrogen" makes them disagree on a bridging H,
+    and the repair then reads a proton migration that never happened. Sharing
+    the hash does not prevent that -- only sharing the assignment does.
+    """
+
+    @staticmethod
+    def _bridging() -> Geometry:
+        """C...H...O with d(C-H)=1.28 and d(O-H)=1.20.
+
+        The distances that separated the two implementations: an element-cutoff
+        rule assigns to carbon (oxygen is outside its 1.15 A cutoff), while
+        nearest-heavy-atom assigns to oxygen.
+        """
+        return Geometry(
+            symbols=("C", "O", "H"),
+            coords=np.array([[0.0, 0.0, 0.0], [2.48, 0.0, 0.0], [1.28, 0.0, 0.0]]),
+        )
+
+    def test_the_count_vector_comes_from_one_place(self) -> None:
+        geom = self._bridging()
+        assert assign_hydrogens(geom) == assign_protons(geom).counts
+
+    def test_the_fingerprint_survives_a_round_trip_through_repair(self) -> None:
+        geom = self._bridging()
+        written_at_sampling = h_assignment_fingerprint(geom)
+        read_back_by_repair = fingerprint_counts(assign_protons(geom).counts)
+        assert written_at_sampling == read_back_by_repair
+
+    def test_nearest_heavy_atom_wins_with_no_cutoff(self) -> None:
+        """Pins the rule itself, so a cutoff cannot be reintroduced silently."""
+        geom = self._bridging()
+        heavy = geom.heavy_atom_indices
+        assert assign_protons(geom).owner == (heavy[1],)  # the oxygen, at 1.20 A

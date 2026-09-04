@@ -50,7 +50,17 @@ Microstates in the RDKit-first path are identified by `protomer_key`, not by
 canonical SMILES. Two SMILES that describe one species with a delocalised charge
 written on different atoms — a 4-substituted imidazolium, an enolate — are
 otherwise computed twice and double-counted in the partition function. Radicals
-and multi-component inputs are rejected at entry rather than approximated. See
+and multi-component inputs are rejected at entry rather than approximated.
+
+The same identity is read back off the geometry after sampling and after
+refinement, because protons migrate between heavy atoms during minimisation —
+often enough that about a quarter of conformers in the first training batch were
+filed under a protomer they no longer matched. Those are re-filed under the
+microstate they became, before deduplication, so they collapse against it rather
+than buying a Hessian twice; a conformer that fragmented or became a species no
+microstate describes is recorded in `excluded_conformers`. Every protomer of a
+molecule is embedded in one heavy-atom order (`frame_atom_order`) so that
+re-filing is a regrouping rather than an atom-correspondence problem. See
 [docs/protomer-identity.md](docs/protomer-identity.md).
 
 ## Data model
@@ -166,6 +176,7 @@ Source under `qm_pka/`. One-liner per module:
 | `crest_runner.py`, `xtb_runner.py` | CREST/xTB subprocess wrappers |
 | `charge_enumeration.py` | SMARTS-based BFS to enumerate charge states |
 | `rdkit_utils.py` | SMILES ↔ 3D, tautomer enumeration, protomer identity, input validation |
+| `protomer_geometry.py` | Protomer identity from coordinates; re-files conformers whose proton moved |
 | `stereo.py` | Stereoisomer enumeration + enantiomer dedup via mirror-SMILES |
 | `tautomer_dedup.py` | H-count-per-heavy-atom fingerprint (used by approach 2) |
 | `thermo.py` | Quasi-RRHO free energy (Grimme 2012) |

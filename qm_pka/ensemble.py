@@ -30,7 +30,12 @@ HARTREE_TO_KCAL = 627.5094740631
 # Bumped when a change makes an older ensemble.json unsafe to resume from.
 # 1 -> 2: conformers carry a `multiplicity`; without it every conformer reloads
 # at 1.0 and the run silently reproduces the old unweighted answer.
-SCHEMA_VERSION = 2
+# 2 -> 3: heavy atoms are embedded in `rdkit_utils.frame_atom_order`, so every
+# microstate of a molecule shares one heavy-atom order. Older files predate it,
+# and the proton-migration repair refuses to move a conformer between two
+# microstates that disagree about that order -- so resuming would silently skip
+# the re-filing the stage exists to do.
+SCHEMA_VERSION = 3
 
 
 def boltzmann_weights(
@@ -201,7 +206,10 @@ def deduplicate_conformers(
         raise ValueError(
             "conformers of one microstate must share an atom ordering; got "
             f"{''.join(symbols)} and {''.join(mismatched.geometry.symbols)}. "
-            "A proton that migrated between heavy atoms produces this."
+            "Conformers that migrated to another microstate are re-filed by "
+            "protomer_geometry.repair_migrated_conformers, which regroups their "
+            "hydrogens into the destination's order; reaching here means one was "
+            "moved some other way."
         )
 
     coords = np.array([c.geometry.coords for c in conformers])

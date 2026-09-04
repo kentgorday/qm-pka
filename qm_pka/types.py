@@ -97,12 +97,17 @@ class Conformer:
 # Where a conformer was lost, and to what.  Spelled out as literals so that a
 # typo is a type error rather than a category that silently never matches when
 # someone groups a finished run by reason.
-ExclusionStage = Literal["refinement", "scoring"]
+ExclusionStage = Literal["sampling", "refinement", "scoring"]
 ExclusionReason = Literal[
     "optimization_failed",  # the optimizer itself raised (SCF non-convergence, faults)
     "gas_phase_sp_failed",  # optimization succeeded; the gas-phase decomposition point did not
     "rrho_failed",
     "scoring_failed",
+    # The three below differ in kind from the four above: the energy computed
+    # fine, and it is the *label* that is wrong.  See qm_pka.protomer_geometry.
+    "proton_detached",  # a hydrogen left the molecule; the energy is a fragment's
+    "no_matching_microstate",  # minimised to a species the enumerator never produced
+    "ambiguous_microstate",  # several microstates match; they differ only in stereochemistry
 ]
 
 
