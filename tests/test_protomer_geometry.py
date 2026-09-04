@@ -519,10 +519,7 @@ class TestMatchToCandidate:
         geom, explicit = _embed(r"OC(=[OH+])/C=C\\C(=O)O")
         template = template_from_smiles(explicit)
         assert (
-            match_to_candidate(
-                geom, assign_protons(geom), template, template, False, same_microstate=True
-            )
-            is not None
+            match_to_candidate(geom, assign_protons(geom), template, template, False) is not None
         )
 
     def test_a_geometry_is_rejected_by_the_wrong_diastereomer(self) -> None:
@@ -530,17 +527,14 @@ class TestMatchToCandidate:
         cis = template_from_smiles(explicit)
         trans = template_from_smiles(smiles_to_3d(r"OC(=[OH+])/C=C/C(=O)O")[1])
         assignment = assign_protons(geom)
-        assert match_to_candidate(geom, assignment, cis, cis, False, same_microstate=True)
+        assert match_to_candidate(geom, assignment, cis, cis, False)
         assert match_to_candidate(geom, assignment, cis, trans, False) is None
 
     def test_a_candidate_specifying_no_stereo_cannot_be_contradicted(self) -> None:
         geom, explicit = _embed("NCC(=O)O")
         template = template_from_smiles(explicit)
         assert (
-            match_to_candidate(
-                geom, assign_protons(geom), template, template, False, same_microstate=True
-            )
-            is not None
+            match_to_candidate(geom, assign_protons(geom), template, template, False) is not None
         )
 
     def test_the_mirror_is_accepted_only_for_a_collapsed_enantiomeric_pair(self) -> None:
@@ -550,7 +544,7 @@ class TestMatchToCandidate:
         mirror = template_from_smiles(smiles_to_3d("N[C@H](C)C(=O)O")[1])
         assignment = assign_protons(geom)
         # The geometry is its own label either way.
-        assert match_to_candidate(geom, assignment, own, own, False, same_microstate=True)
+        assert match_to_candidate(geom, assignment, own, own, False)
         # Against the opposite configuration it depends on what the microstate means.
         assert match_to_candidate(geom, assignment, own, mirror, False) is None
         assert match_to_candidate(geom, assignment, own, mirror, True) is not None
@@ -666,7 +660,9 @@ class TestPseudoAsymmetry:
     2,3,4-trihydroxyglutaric acid has a pseudo-asymmetric C3. Deprotonating
     either end breaks the tie, giving two diastereomers that share a protonation
     key -- so a proton moving from one end to the other is invisible to the key,
-    and the skeleton automorphism relating them is stereo-relevant.
+    and the skeleton automorphism relating them is stereo-relevant. This is the
+    case that shows why no candidate, not even the conformer's own microstate,
+    may skip the layout step.
     """
 
     E1: ClassVar[str] = "O=C([O-])[C@@H](O)[C@@H](O)[C@@H](O)C(=O)O"
@@ -725,18 +721,16 @@ class TestPseudoAsymmetry:
         cs = ChargeState(charge=-1, microstates=[source, target])
         report = repair_migrated_conformers(cs, stage="refinement")
 
-        # Detected, but not resolved. Both candidates are satisfiable, because the
-        # skeleton's automorphism group is larger than the molecule's stereo
-        # automorphism group: the half-swap relating the two ends is a symmetry of
-        # the skeleton but not of the stereochemistry, and enumerating over it lets
-        # the wrong candidate be satisfied by a chemically invalid relabelling.
-        # Restricting to stereo-preserving automorphisms is circular. Both match
-        # on real evidence, so the tie stays visible rather than being resolved by
-        # preferring where the conformer started -- excluding is the safe outcome
-        # and a strict improvement on the silent misfiling this case got before
-        # stereo was verified at all.
-        assert report.ambiguous == 1
-        assert report.moved == 0
+        # Resolved, and only because the conformer's own microstate gets no
+        # shortcut. The geometry is in E1's atom order and keys as E1, but its
+        # hydrogens sit on the symmetry-related positions E1's template does not
+        # use -- so laying it into E1 fails, while a layout into E5 succeeds.
+        # Short-circuiting the own-microstate check made E1 verify trivially,
+        # because the three CH(OH) centres are unaffected by which carboxyl holds
+        # the proton and nothing else was compared.
+        assert report.moved == 1, "stereo must catch what the protonation key cannot"
+        assert report.stereo_resolved == 1
+        assert report.ambiguous == 0
         assert source.conformers == []
-        assert source.excluded_conformers[0].reason == "ambiguous_microstate"
-        assert target.conformers == []
+        assert source.excluded_conformers == []
+        assert len(target.conformers) == 1
