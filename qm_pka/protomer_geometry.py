@@ -69,10 +69,10 @@ __all__ = [
     "DETACHED_DISTANCE",
     "ProtonAssignment",
     "assign_protons",
+    "match_to_candidate",
     "protonation_key_from_geometry",
     "protonation_key_from_mol",
     "repair_migrated_conformers",
-    "resolve_stereo_candidates",
     "template_from_smiles",
 ]
 
@@ -202,36 +202,18 @@ def _specified_stereo(
     return bonds, atoms
 
 
-def _stereo_signature(
-    mol: Chem.Mol,
-    bonds: set[tuple[int, int]],
-    atoms: set[int],
-    neutralise: set[int],
-) -> str:
-    """Canonical SMILES reduced to the stereo elements under comparison.
+def _stereo_signature(mol: Chem.Mol, bonds: set[tuple[int, int]], atoms: set[int]) -> str:
+    """Canonical SMILES reduced to the given stereo elements, everything else erased.
 
-    Three treatments, and each is needed:
-
-    * elements in ``bonds`` / ``atoms`` keep their real value -- these decide it;
-    * atoms in ``neutralise`` are forced to one arbitrary common tag, so they
-      cancel between the two sides while still being *present*. Clearing them
-      instead would break a pseudo-asymmetric centre: a 1,4-ring cis/trans
-      relationship is carried by a pair of atoms, and a lone tagged ring carbon
-      has two identical branches, so RDKit drops the tag and both candidates
-      canonicalise identically;
-    * everything else is erased, because `AssignStereochemistryFrom3D` annotates
-      whatever the coordinates support -- a protonated carbonyl is a stereogenic
-      double bond no label mentions -- and those would match nothing.
+    Erasing the rest is required, not tidiness: `AssignStereochemistryFrom3D`
+    annotates whatever the coordinates support, including bonds no label
+    constrains -- a protonated carbonyl is a stereogenic double bond -- and those
+    would match nothing.
     """
     rw = Chem.RWMol(mol)
     positions = _heavy_positions(rw)
     for atom in rw.GetAtoms():
-        position = positions.get(atom.GetIdx(), -1)
-        if position in atoms:
-            continue
-        if position in neutralise:
-            atom.SetChiralTag(Chem.ChiralType.CHI_TETRAHEDRAL_CW)
-        else:
+        if positions.get(atom.GetIdx(), -1) not in atoms:
             atom.SetChiralTag(Chem.ChiralType.CHI_UNSPECIFIED)
     for bond in rw.GetBonds():
         i, j = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
@@ -245,24 +227,112 @@ def _stereo_signature(
     return str(Chem.MolToSmiles(rw.GetMol()))
 
 
-def _stereo_from_geometry(
+_MIRROR_TAG = {
+    Chem.ChiralType.CHI_TETRAHEDRAL_CW: Chem.ChiralType.CHI_TETRAHEDRAL_CCW,
+    Chem.ChiralType.CHI_TETRAHEDRAL_CCW: Chem.ChiralType.CHI_TETRAHEDRAL_CW,
+}
+
+
+def _mirror(mol: Chem.Mol) -> Chem.Mol:
+    """The enantiomer: every tetrahedral tag inverted, bond stereo untouched.
+
+    Reflection inverts configuration at every centre and leaves E/Z alone. The
+    asymmetry is deliberate -- inverting bond stereo too would turn cis into
+    trans and make an enantiomer-collapsed microstate accept the wrong
+    diastereomer.
+    """
+    rw = Chem.RWMol(mol)
+    for atom in rw.GetAtoms():
+        tag = atom.GetChiralTag()
+        if tag in _MIRROR_TAG:
+            atom.SetChiralTag(_MIRROR_TAG[tag])
+    return rw.GetMol()
+
+
+def _layouts_for_target(
     geom: Geometry,
     assignment: ProtonAssignment,
     source_template: Chem.Mol,
-    candidate_template: Chem.Mol,
-) -> Chem.Mol:
-    """The candidate's bond graph, with its stereo read off the given coordinates.
+    target_template: Chem.Mol,
+    max_layouts: int = 64,
+) -> list[Geometry]:
+    """Every atom ordering of ``geom`` consistent with the target's skeleton.
 
-    Each candidate is tested on *its own* bond orders. The migration invalidated
-    the bond orders of the microstate the conformer came from, not those of the
-    ones it might have become -- so there is no need to perceive bond orders from
-    coordinates, only to ask which hypothesis the geometry agrees with.
+    Usually one. More than one when the skeleton has an automorphism that
+    preserves the hydrogen distribution, and then the choice is *not* free: it
+    decides which of two symmetry-related sites a proton is taken to sit on, and
+    a pseudo-asymmetric centre reads differently under each. Canonical ranking
+    picks one arbitrarily and gets it wrong about half the time, so every
+    consistent ordering is offered and the caller keeps whichever reproduces the
+    candidate's own stereo.
+
+    Matches are filtered to those preserving hydrogen counts. The matcher itself
+    ignores them, which would map a protonated site onto an automorphic bare one
+    -- the same trap that made a plain substructure match unusable for the
+    ordering in the first place.
     """
-    regrouped = _regroup_hydrogens(geom, assignment, source_template, candidate_template)
-    mol = Chem.Mol(candidate_template)
+    source_skeleton = _skeleton_mol(source_template, assignment.counts)
+    target_skeleton = _skeleton_mol(target_template, _template_counts(target_template))
+    matches = target_skeleton.GetSubstructMatches(
+        source_skeleton, uniquify=False, useChirality=False, maxMatches=max_layouts
+    )
+    if len(matches) == max_layouts:
+        log.warning(
+            f"  skeleton automorphism search hit its cap of {max_layouts}; "
+            f"some atom orderings were not considered"
+        )
+
+    slots = _heavy_slots(target_template)
+    heavy = geom.heavy_atom_indices
+    layouts: list[Geometry] = []
+    seen: set[tuple[int, ...]] = set()
+    for match in matches:
+        if any(
+            source_skeleton.GetAtomWithIdx(src).GetNumExplicitHs()
+            != target_skeleton.GetAtomWithIdx(tgt).GetNumExplicitHs()
+            for src, tgt in enumerate(match)
+        ):
+            continue
+        source_of_target = {tgt: src for src, tgt in enumerate(match)}
+
+        pending: dict[int, list[int]] = defaultdict(list)
+        for h_idx, owner in zip(geom.hydrogen_indices, assignment.owner, strict=True):
+            pending[heavy.index(owner)].append(h_idx)
+
+        order: list[int] = []
+        next_heavy = 0
+        ok = True
+        for slot in slots:
+            source_pos = source_of_target[next_heavy if slot is None else slot]
+            if slot is None:
+                order.append(heavy[source_pos])
+                next_heavy += 1
+            elif pending[source_pos]:
+                order.append(pending[source_pos].pop(0))
+            else:
+                ok = False
+                break
+        if not ok or len(order) != len(geom.symbols) or any(pending.values()):
+            continue
+        key = tuple(order)
+        if key in seen:
+            continue
+        seen.add(key)
+        layouts.append(
+            Geometry(
+                symbols=tuple(geom.symbols[i] for i in order),
+                coords=geom.coords[order].copy(),
+            )
+        )
+    return layouts
+
+
+def _stereo_from_coordinates(template: Chem.Mol, laid_out: Geometry) -> Chem.Mol:
+    """The template's bond graph carrying the stereo those coordinates show."""
+    mol = Chem.Mol(template)
     conformer = Chem.Conformer(mol.GetNumAtoms())
     for i in range(mol.GetNumAtoms()):
-        x, y, z = regrouped.coords[i]
+        x, y, z = laid_out.coords[i]
         conformer.SetAtomPosition(i, Point3D(float(x), float(y), float(z)))
     mol.RemoveAllConformers()
     mol.AddConformer(conformer, assignId=True)
@@ -270,60 +340,66 @@ def _stereo_from_geometry(
     return mol
 
 
-def resolve_stereo_candidates(
+def match_to_candidate(
     geom: Geometry,
     assignment: ProtonAssignment,
     source_template: Chem.Mol,
-    candidate_templates: list[Chem.Mol],
-) -> list[int]:
-    """Which of several same-protonation candidates the geometry actually is.
+    candidate_template: Chem.Mol,
+    includes_enantiomer: bool,
+    same_microstate: bool = False,
+) -> tuple[Geometry, bool] | None:
+    """Is this geometry the candidate? If so, in the candidate's atom order.
 
-    The protonation key carries no bond orders, so microstates differing only in
-    double-bond configuration -- fumaric and maleic acid, the enol forms of a
-    1,3-dicarbonyl -- share one key. The geometry still knows: a proton moving
-    between heteroatoms does not rotate a C=C, so the configuration is there to
-    be read.
+    Returns ``(layout, verified)``, where ``verified`` says whether any stereo
+    element was actually compared. A candidate constraining nothing cannot be
+    contradicted, so it always matches -- but it matched on no evidence, and the
+    caller must not let that outrank a candidate whose stereo was checked.
 
-    Returns the indices of the candidates whose own stereo matches what the
-    coordinates show. One is an answer; anything else is a genuine tie.
+    Stereochemistry is verified, not assumed. The protonation key carries none,
+    so a microstate's label is a claim about configuration that nothing checked
+    until here -- and a change confined to stereochemistry leaves the key
+    untouched, which is precisely where it hides.
+
+    Each candidate is tested on *its own* bond orders. A migration invalidates
+    the bond orders of the microstate the conformer came from, never those of
+    the ones it might have become, so no bond is ever perceived from
+    coordinates: the question is only which hypothesis the geometry agrees with.
+
+    Only elements the candidate constrains *and* the coordinates determine are
+    compared. A candidate that specifies nothing cannot be contradicted, and a
+    bond that is single under this candidate's orders is free to rotate and
+    cannot testify.
+
+    When the microstate stands for a collapsed enantiomeric pair the mirror image
+    is accepted too, because that is what the microstate means. Verifying against
+    the conformer's own microstate needs no reordering at all -- the geometry is
+    already in that order -- so ``same_microstate`` takes the exact path with no
+    automorphism choice to make.
     """
-    specified = [_specified_stereo(t) for t in candidate_templates]
-    if not specified or all(entry == specified[0] for entry in specified):
-        return []
+    specified_bonds, specified_atoms = _specified_stereo(candidate_template)
+    candidates_layouts = (
+        [geom]
+        if same_microstate
+        else _layouts_for_target(geom, assignment, source_template, candidate_template)
+    )
+    if not specified_bonds and not specified_atoms:
+        return (candidates_layouts[0], False) if candidates_layouts else None
 
-    # Elements the candidates disagree on are the ones that decide it. Elements
-    # they agree on cannot discriminate, and comparing them does harm: a
-    # microstate that stands for a collapsed enantiomeric pair may legitimately
-    # show either configuration, and a migration can create a stereocentre the
-    # source geometry never had an opinion about.
-    bond_keys = set().union(*(set(b) for b, _ in specified))
-    atom_keys = set().union(*(set(a) for _, a in specified))
-    decisive_bonds = {k for k in bond_keys if len({b.get(k) for b, _ in specified}) > 1}
-    decisive_atoms = {k for k in atom_keys if len({a.get(k) for _, a in specified}) > 1}
-    neutral_atoms = atom_keys - decisive_atoms
-
-    agreeing: list[int] = []
-    for index, candidate in enumerate(candidate_templates):
-        try:
-            observed = _stereo_from_geometry(geom, assignment, source_template, candidate)
-        except ValueError:  # pragma: no cover - the caller has matched keys already
-            continue
-
-        # A bond that is single under this candidate's bond orders is free to
-        # rotate and cannot testify; counting it as a mismatch would reject
-        # every candidate.
-        observed_bonds, _ = _specified_stereo(observed)
-        bonds = decisive_bonds & set(observed_bonds)
-        if not bonds and not decisive_atoms:
-            # Nothing contradicts this candidate, so it stays in contention.
-            # The caller treats a surviving tie as unresolved.
-            agreeing.append(index)
-            continue
-        if _stereo_signature(observed, bonds, decisive_atoms, neutral_atoms) == _stereo_signature(
-            candidate, bonds, decisive_atoms, neutral_atoms
+    for laid_out in candidates_layouts:
+        observed = _stereo_from_coordinates(candidate_template, laid_out)
+        observed_bonds, observed_atoms = _specified_stereo(observed)
+        bonds = set(specified_bonds) & set(observed_bonds)
+        atoms = set(specified_atoms) & set(observed_atoms)
+        if not bonds and not atoms:
+            return (laid_out, False)
+        seen = _stereo_signature(observed, bonds, atoms)
+        if seen == _stereo_signature(candidate_template, bonds, atoms):
+            return (laid_out, True)
+        if includes_enantiomer and seen == _stereo_signature(
+            _mirror(candidate_template), bonds, atoms
         ):
-            agreeing.append(index)
-    return agreeing
+            return (laid_out, True)
+    return None
 
 
 @dataclass
@@ -336,6 +412,7 @@ class MigrationReport:
     unmatched: int = 0
     ambiguous: int = 0
     stereo_resolved: int = 0
+    stereo_unmatched: int = 0
     created: int = 0
     tightest_margin: float = float("inf")
 
@@ -561,7 +638,7 @@ def _repair_labelled(cs: ChargeState, stage: ExclusionStage) -> MigrationReport:
         by_key[key].append(pos)
 
     keep: dict[int, list[Conformer]] = {pos: [] for pos in range(len(cs.microstates))}
-    moves: list[tuple[int, int, Conformer, ProtonAssignment]] = []
+    moves: list[tuple[int, int, Conformer, Geometry]] = []
 
     for pos, ms in enumerate(cs.microstates):
         for conf in ms.conformers:
@@ -586,10 +663,6 @@ def _repair_labelled(cs: ChargeState, stage: ExclusionStage) -> MigrationReport:
                 continue
 
             geom_key = _key_from_counts(templates[pos], assignment.counts, cs.charge)
-            if geom_key == label_key[pos]:
-                keep[pos].append(conf)
-                continue
-
             candidates = by_key.get(geom_key, [])
             if not candidates:
                 report.unmatched += 1
@@ -606,60 +679,97 @@ def _repair_labelled(cs: ChargeState, stage: ExclusionStage) -> MigrationReport:
                 )
                 continue
 
-            target = candidates[0]
-            if len(candidates) > 1:
-                # Same protonation, different double-bond configuration. The key
-                # cannot tell them apart, but the coordinates can.
-                agreeing = resolve_stereo_candidates(
+            # Stereochemistry is verified here rather than assumed, including for
+            # a conformer that appears to match its own label -- a change
+            # confined to stereo leaves the protonation key untouched, so that
+            # branch is exactly where it hides.
+            viable: list[tuple[int, Geometry, bool]] = []
+            for candidate in candidates:
+                if candidate != pos and _frame_ranks(templates[pos]) != _frame_ranks(
+                    templates[candidate]
+                ):
+                    # smiles_to_3d establishes this; a violation means a geometry
+                    # was built some other way, and pairing up heavy atoms that
+                    # may not correspond would be worse than declining.
+                    log.error(
+                        f"  q={cs.charge}: {ms.tautomer_id[:32]} and "
+                        f"{cs.microstates[candidate].tautomer_id[:32]} disagree on heavy-atom "
+                        f"order; not considering that destination"
+                    )
+                    continue
+                matched = match_to_candidate(
                     conf.geometry,
                     assignment,
                     templates[pos],
-                    [templates[c] for c in candidates],
+                    templates[candidate],
+                    cs.microstates[candidate].includes_enantiomer,
+                    same_microstate=(candidate == pos),
                 )
-                if len(agreeing) != 1:
-                    report.ambiguous += 1
-                    log.warning(
-                        f"  q={cs.charge}: a conformer of {ms.tautomer_id[:32]} migrated to a "
-                        f"protonation state shared by {len(candidates)} microstates, and its "
-                        f"geometry matches {len(agreeing)} of them; excluding it"
-                    )
-                    _exclude(
-                        ms,
-                        conf,
-                        stage,
-                        "ambiguous_microstate",
-                        f"geometry key {geom_key} matches "
-                        f"{', '.join(cs.microstates[c].tautomer_id for c in candidates)}",
-                    )
-                    continue
-                report.stereo_resolved += 1
-                target = candidates[agreeing[0]]
+                if matched is not None:
+                    viable.append((candidate, matched[0], matched[1]))
 
+            # A candidate constraining no stereo matches on no evidence, and must
+            # not outrank one whose configuration was actually checked. The two
+            # kinds of tie then differ: several candidates matching *vacuously*
+            # means nothing indicates a change, so staying put is right and
+            # unremarkable; several matching on real evidence is a genuine
+            # conflict and has to stay visible rather than be resolved by
+            # preferring where the conformer happened to start.
+            verified = [entry for entry in viable if entry[2]]
+            if len(verified) == 1:
+                viable = verified
+            elif not verified and len(viable) > 1 and any(entry[0] == pos for entry in viable):
+                viable = [entry for entry in viable if entry[0] == pos]
+
+            if len(viable) > 1:
+                report.ambiguous += 1
+                log.warning(
+                    f"  q={cs.charge}: a conformer of {ms.tautomer_id[:32]} matches "
+                    f"{len(viable)} microstates at this protonation; excluding it"
+                )
+                _exclude(
+                    ms,
+                    conf,
+                    stage,
+                    "ambiguous_microstate",
+                    f"geometry key {geom_key} matches "
+                    f"{', '.join(cs.microstates[c].tautomer_id for c, _, _ in viable)}",
+                )
+                continue
+
+            if not viable:
+                # The protonation is right and no microstate has this
+                # configuration. Deliberately kept rather than excluded: if
+                # sampling inverted the centre it is not configurationally
+                # stable, and the label over-claimed. See "Known limitations"
+                # in docs/protomer-identity.md.
+                report.stereo_unmatched += 1
+                log.warning(
+                    f"  q={cs.charge}: a conformer of {ms.tautomer_id[:32]} has the right "
+                    f"protonation but a configuration no microstate at this charge describes; "
+                    f"keeping it where it is -- the specified stereochemistry may not be stable"
+                )
+                keep[pos].append(conf)
+                continue
+
+            target, laid_out, _ = viable[0]
+            if target == pos:
+                keep[pos].append(conf)
+                continue
+
+            if len(candidates) > 1:
+                report.stereo_resolved += 1
             report.moved += 1
             log.info(
-                f"  q={cs.charge}: a proton moved during minimisation; re-filing a conformer "
-                f"of {ms.tautomer_id[:32]} under {cs.microstates[target].tautomer_id[:32]}"
+                f"  q={cs.charge}: re-filing a conformer of {ms.tautomer_id[:32]} under "
+                f"{cs.microstates[target].tautomer_id[:32]}"
             )
-            moves.append((target, pos, conf, assignment))
+            moves.append((target, pos, conf, laid_out))
 
     for pos, ms in enumerate(cs.microstates):
         ms.conformers = keep[pos]
-    for target, source, conf, assignment in moves:
-        if _frame_ranks(templates[source]) != _frame_ranks(templates[target]):
-            # smiles_to_3d establishes this; a violation means a geometry was
-            # built some other way. Leave the conformer where it is rather than
-            # silently pairing up heavy atoms that may not correspond.
-            log.error(
-                f"  q={cs.charge}: {cs.microstates[source].tautomer_id[:32]} and "
-                f"{cs.microstates[target].tautomer_id[:32]} disagree on heavy-atom order; "
-                f"not re-filing this conformer"
-            )
-            cs.microstates[source].conformers.append(conf)
-            report.moved -= 1
-            continue
-        conf.geometry = _regroup_hydrogens(
-            conf.geometry, assignment, templates[source], templates[target]
-        )
+    for target, _source, conf, laid_out in moves:
+        conf.geometry = laid_out
         cs.microstates[target].conformers.append(conf)
 
     return report
