@@ -49,7 +49,8 @@ from qm_pka.tautomer_dedup import (
     DETACHED_DISTANCE,
     ProtonAssignment,
     assign_protons,
-    fingerprint_counts,
+    geometric_fingerprint,
+    heavy_frameworks_agree,
 )
 from qm_pka.types import (
     ChargeState,
@@ -785,18 +786,16 @@ def _repair_unlabelled(cs: ChargeState, stage: ExclusionStage) -> MigrationRepor
     """
     report = MigrationReport()
 
-    heavy_reference: list[str] | None = None
+    reference: Geometry | None = None
     for ms in cs.microstates:
         for conf in ms.conformers:
-            geom = conf.geometry
-            heavy = [geom.symbols[i] for i in geom.heavy_atom_indices]
-            if heavy_reference is None:
-                heavy_reference = heavy
-            elif heavy != heavy_reference:
+            if reference is None:
+                reference = conf.geometry
+            elif not heavy_frameworks_agree(reference, conf.geometry):
                 log.warning(
-                    f"  q={cs.charge}: microstates do not share a heavy-atom ordering "
-                    f"({''.join(heavy_reference)} vs {''.join(heavy)}); skipping the "
-                    f"proton-migration check, whose fingerprint is positional"
+                    f"  q={cs.charge}: structures do not share a heavy-atom order or "
+                    f"framework; skipping the proton-migration check, which is indexed "
+                    f"by heavy-atom position throughout"
                 )
                 return report
 
@@ -827,7 +826,7 @@ def _repair_unlabelled(cs: ChargeState, stage: ExclusionStage) -> MigrationRepor
                 )
                 continue
 
-            fingerprint = fingerprint_counts(assignment.counts)
+            fingerprint = geometric_fingerprint(conf.geometry)
             if fingerprint == ms.tautomer_id:
                 keep[pos].append(conf)
             elif fingerprint in by_fingerprint:

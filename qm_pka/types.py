@@ -108,6 +108,7 @@ ExclusionReason = Literal[
     "proton_detached",  # a hydrogen left the molecule; the energy is a fragment's
     "no_matching_microstate",  # minimised to a species the enumerator never produced
     "ambiguous_microstate",  # several microstates match; they differ only in stereochemistry
+    "incompatible_atom_order",  # cannot be pooled with its microstate; orders disagree
 ]
 
 

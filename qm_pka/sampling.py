@@ -24,7 +24,7 @@ from qm_pka.crest_runner import (
     protonate,
     tautomerize,
 )
-from qm_pka.ensemble import HARTREE_TO_KCAL, deduplicate_conformers
+from qm_pka.ensemble import HARTREE_TO_KCAL, deduplicate_charge_state, deduplicate_conformers
 from qm_pka.protomer_geometry import repair_migrated_conformers
 from qm_pka.rdkit_utils import (
     canonical_smiles,
@@ -37,7 +37,14 @@ from qm_pka.rdkit_utils import (
 from qm_pka.stereo import enumerate_and_deduplicate
 from qm_pka.tautomer_dedup import deduplicate_tautomers
 from qm_pka.thermo import quasi_rrho_free_energy
-from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
+from qm_pka.types import (
+    ChargeState,
+    Conformer,
+    Ensemble,
+    ExcludedConformer,
+    Geometry,
+    Microstate,
+)
 from qm_pka.xtb_runner import frequencies, optimize, single_point
 
 log = logging.getLogger(__name__)
@@ -551,18 +558,58 @@ def run_approach2(
         for q, microstates in ms_by_charge.items():
             all_microstates.setdefault(q, []).extend(microstates)
 
-    # Step 3: Deduplicate microstates across stereoisomers by tautomer_id
+    # Step 3: pool microstates that different stereoisomers arrived at.
+    #
+    # Each input stereoisomer is walked separately because CREST's protonation
+    # operations do not preserve configuration: --deprotonate removes the
+    # hydrogen from a quaternised nitrogen, at which point the centre ceases to
+    # exist and the amine inverts freely, and --protonate rebuilds it on whichever
+    # face the physics picks. So a run cannot be assumed to stay in the
+    # stereochemical lane it started in.
+    #
+    # Two runs therefore explore overlapping ground and a shared id used to mean
+    # "reached twice, keep the better sampling" -- which silently deleted a whole
+    # microstate whenever it instead meant "two diastereomers the id could not
+    # tell apart". The identity now carries tetrahedral configuration, so a
+    # collision means one species and the conformers are pooled. Deduplication
+    # then collapses whatever the two runs found in common.
     for q, microstates in all_microstates.items():
         seen: dict[str, Microstate] = {}
         for ms in microstates:
-            if ms.tautomer_id not in seen:
+            survivor = seen.get(ms.tautomer_id)
+            if survivor is None:
                 seen[ms.tautomer_id] = ms
-            else:
-                # Keep the one with the lower best energy
-                existing_best = min(c.free_energy for c in seen[ms.tautomer_id].conformers)
-                new_best = min(c.free_energy for c in ms.conformers)
-                if new_best < existing_best:
-                    seen[ms.tautomer_id] = ms
-        ensemble.charge_states[q] = ChargeState(charge=q, microstates=list(seen.values()))
+                continue
+            reference = survivor.conformers[0].geometry if survivor.conformers else None
+            for conf in ms.conformers:
+                if reference is not None and list(conf.geometry.symbols) != list(
+                    reference.symbols
+                ):
+                    log.error(
+                        f"  q={q}: a conformer of tautomer {ms.tautomer_id[:8]} orders its "
+                        f"atoms differently from the microstate it shares an id with; "
+                        f"recording it rather than pooling"
+                    )
+                    survivor.excluded_conformers.append(
+                        ExcludedConformer(
+                            geometry=conf.geometry,
+                            stage="sampling",
+                            reason="incompatible_atom_order",
+                            detail="atom ordering differs from the pooled microstate",
+                            multiplicity=conf.multiplicity,
+                            electronic_energy=conf.electronic_energy,
+                            solvation_energy=conf.solvation_energy,
+                            rrho_correction=conf.rrho_correction,
+                        )
+                    )
+                    continue
+                survivor.conformers.append(conf)
+            survivor.excluded_conformers.extend(ms.excluded_conformers)
+
+        cs = ChargeState(charge=q, microstates=list(seen.values()))
+        before, after = deduplicate_charge_state(cs)
+        if after < before:
+            log.info(f"  q={q}: pooling across stereoisomers, {before} -> {after} conformer(s)")
+        ensemble.charge_states[q] = cs
 
     return ensemble
