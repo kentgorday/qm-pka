@@ -96,6 +96,12 @@ def fingerprint_counts(h_counts: tuple[int, ...]) -> str:
     recomputed later -- by `protomer_geometry.repair_migrated_conformers`, on a
     geometry that has since been minimised -- is comparable to the one stored as
     ``tautomer_id`` at sampling.
+
+    This is the extension point for giving approach 2 a stereo model: tetrahedral
+    parity and, less straightforwardly, double-bond configuration would join the
+    hydrogen counts here. Both are TODO -- see "Known limitations" in
+    docs/protomer-identity.md for what each would take and why the second is
+    unresolved.
     """
     return hashlib.sha256(repr(h_counts).encode()).hexdigest()[:16]
 
