@@ -68,12 +68,19 @@ def _parse_single_xyz(lines: list[str]) -> Geometry:
 
 
 def _parse_comment_energy(comment: str) -> float:
-    """Extract energy in Hartree from a CREST-style comment line.
+    """Extract energy in Hartree from an XYZ comment line.
 
-    CREST writes the energy as the first token in the comment line,
-    e.g. '     -15.12345678' or '-15.12345678   1.0000000000'.
+    Two writers, two formats. CREST puts the energy first and bare:
+    ``     -15.12345678`` or ``-15.12345678   1.0000000000``. xtb labels it and
+    adds more fields: ``energy: -25.48374686 gnorm: 0.00010193 xtb: 6.7.1``.
+    Take the value after an ``energy:`` label when one is present, otherwise the
+    first token.
     """
-    return float(comment.split()[0])
+    tokens = comment.split()
+    for index, token in enumerate(tokens):
+        if token.rstrip(":").lower() == "energy" and index + 1 < len(tokens):
+            return float(tokens[index + 1])
+    return float(tokens[0])
 
 
 def _format_xyz(geom: Geometry, comment: str = "") -> str:

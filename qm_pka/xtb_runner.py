@@ -3,9 +3,20 @@ energy, and quasi-RRHO vibrational free-energy corrections.
 
 CREST 2.12 drives the external ``xtb`` binary as a subprocess (the CREST 3.x
 in-process rewrite produces degenerate single-conformer ensembles on macOS, so
-we pin 2.12). Geometry optimization goes through CREST (``--mdopt``); single
-points and Hessians call ``xtb`` directly, since CREST 2.x has no single-point
-run mode and only the ``xtb`` binary provides ``--hess``/``--bhess``.
+we pin 2.12). That pin covers the conformer search only. Everything here --
+optimization, single points and Hessians -- calls ``xtb`` directly.
+
+Optimization used to route through CREST ``--mdopt`` to dodge a Fortran
+format-string crash in conda-forge xtb 6.7.1 *build 2*
+(grimme-lab/xtb#1332). Build 4 fixed it and pixi.toml already floors us above
+that, so the workaround outlived its cause -- and it was not free. CREST accepts
+an optimization level, reports success, and returns the input geometry
+bit-identical whenever its own optimizer considers the structure converged, so
+a CREST-optimized conformer could not be tightened at all: ``xtb --opt`` calls
+it converged in one cycle at crude, loose, normal *and* tight, while ``vtight``
+takes tens of cycles and moves it half an angstrom. Structures left at ``tight``
+carry imaginary modes of a few hundred wavenumbers, which a numerical Hessian
+then reports as real.
 """
 
 from __future__ import annotations
@@ -26,10 +37,19 @@ def optimize(
     solvent: str | None = None,
     opt_level: str = "tight",
     work_dir: Path | None = None,
-) -> Geometry:
-    """Run geometry optimization via CREST --mdopt.
+) -> tuple[Geometry, bool]:
+    """Optimize a geometry with ``xtb --opt``.
 
-    Returns the optimized Geometry.
+    Returns ``(geometry, converged)``. A geometry that did not converge is
+    returned anyway, carrying xtb's last step: it is still a better starting
+    point than what went in, and discarding it would lose a conformer for a
+    numerical outcome rather than a chemical one. Callers decide what to do
+    with the flag; nothing here drops anything.
+
+    ``opt_level`` matters more than it looks. CREST's conformer search leaves
+    structures that xtb calls converged at every level up to ``tight``, so
+    re-minimizing those needs ``vtight`` to move at all. Fresh embeddings are
+    far enough from a minimum that ``tight`` does real work.
     """
     cleanup = False
     if work_dir is None:
@@ -41,15 +61,14 @@ def optimize(
         write_xyz(geom, input_xyz)
 
         cmd = [
-            "crest",
+            "xtb",
             str(input_xyz),
-            "--gfn2" if gfn == 2 else f"--gfn{gfn}",
+            "--opt",
+            opt_level,
+            "--gfn",
+            str(gfn),
             "--chrg",
             str(charge),
-            "--optlev",
-            opt_level,
-            "--mdopt",
-            str(input_xyz),
         ]
         if solvent is not None:
             cmd.extend(["--alpb", solvent])
@@ -61,18 +80,21 @@ def optimize(
             text=True,
             timeout=3600,
         )
-        if result.returncode != 0:
+
+        opt_xyz = work_dir / "xtbopt.xyz"
+        if not opt_xyz.exists():
             raise RuntimeError(
-                f"crest optimization failed (exit {result.returncode}):\n{result.stderr[-2000:]}"
+                f"xtb optimization produced no geometry (exit {result.returncode}):\n"
+                f"{result.stderr[-2000:]}"
             )
 
-        opt_xyz = work_dir / "crest_ensemble.xyz"
-        if not opt_xyz.exists():
-            raise FileNotFoundError(f"crest did not produce crest_ensemble.xyz in {work_dir}")
+        # xtb writes xtbopt.xyz even when it runs out of cycles, and says so in
+        # the log rather than in the exit code.
+        converged = "GEOMETRY OPTIMIZATION CONVERGED" in result.stdout
         conformers = read_multi_xyz(opt_xyz)
         if not conformers:
-            raise RuntimeError("crest_ensemble.xyz is empty")
-        return conformers[0].geometry
+            raise RuntimeError("xtbopt.xyz is empty")
+        return conformers[0].geometry, converged
 
     finally:
         if cleanup:

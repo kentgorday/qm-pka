@@ -4,7 +4,13 @@ import numpy as np
 import pytest
 
 from qm_pka.types import Conformer, Geometry
-from qm_pka.xyz_io import read_multi_xyz, read_xyz, write_multi_xyz, write_xyz
+from qm_pka.xyz_io import (
+    _parse_comment_energy,
+    read_multi_xyz,
+    read_xyz,
+    write_multi_xyz,
+    write_xyz,
+)
 
 WATER_XYZ = """\
 3
@@ -85,3 +91,32 @@ class TestWriteMultiXyz:
         assert len(confs2) == 2
         assert confs2[0].electronic_energy == pytest.approx(-1.17)
         assert confs2[1].electronic_energy == pytest.approx(-1.16)
+
+
+class TestCommentEnergyFormats:
+    """Two writers produce two comment styles; both reach this parser.
+
+    CREST puts the energy first and bare. xtb labels it and appends further
+    fields. Optimization moved from CREST to xtb, so files in both styles are
+    read by the same code.
+    """
+
+    @pytest.mark.parametrize(
+        "comment,expected",
+        [
+            ("     -15.12345678", -15.12345678),
+            ("-15.12345678   1.0000000000", -15.12345678),
+            (
+                " energy: -25.483746863396 gnorm: 0.000101931177 xtb: 6.7.1 (edcfbbe)",
+                -25.483746863396,
+            ),
+            ("energy: -12.5", -12.5),
+            ("ENERGY: -1.25 gnorm: 0.1", -1.25),
+        ],
+    )
+    def test_both_styles_parse(self, comment: str, expected: float) -> None:
+        assert _parse_comment_energy(comment) == pytest.approx(expected)
+
+    def test_a_bare_number_still_wins_when_no_label_is_present(self) -> None:
+        """The CREST path must not be disturbed by the new label handling."""
+        assert _parse_comment_energy("-3.5 -99.0") == pytest.approx(-3.5)
