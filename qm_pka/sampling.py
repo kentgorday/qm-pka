@@ -109,6 +109,43 @@ def _dedupe_add_rrho_and_filter(
     that only picks between near-identical structures, and refinement either
     recomputes its RRHO or excludes it.
     """
+    # Re-minimize before anything compares or differentiates these. CREST's
+    # search leaves structures that xtb already calls converged at `tight` --
+    # one cycle, no movement, at every level up to it -- yet which carry
+    # imaginary modes of a few hundred wavenumbers. Only `vtight` rejects them,
+    # and then it takes tens of cycles and moves half an angstrom. Both steps
+    # below assume a stationary point: the deduplication compares geometries,
+    # and a numerical Hessian on a non-stationary structure reports the residual
+    # gradient as imaginary frequencies. Measured on the first validation
+    # molecule, this removed 8 of 12 such modes and recovered up to 4.5 kcal/mol
+    # of electronic energy, which is enough to reorder a 10 kcal/mol window.
+    #
+    # A conformer that fails to converge is kept, carrying xtb's last step, for
+    # the reason refinement keeps its own: an unminimized geometry sits above
+    # its true minimum, so it is under-weighted rather than dominant, and
+    # dropping it would lose a conformer over a numerical outcome.
+    for conf in conformers:
+        try:
+            geom, converged = optimize(
+                conf.geometry, charge=charge, solvent=solvent, opt_level="vtight"
+            )
+        except Exception as e:
+            log.warning(f"    xTB re-minimization failed for a conformer: {e}; keeping it as-is")
+            continue
+        conf.geometry = geom
+        if not converged:
+            log.warning("    xTB re-minimization did not converge; keeping the last-step geometry")
+        try:
+            gas_phase = single_point(geom, charge=charge, solvent=None)
+            conf.electronic_energy = gas_phase
+            conf.solvation_energy = (
+                single_point(geom, charge=charge, solvent=solvent) - gas_phase
+                if solvent is not None
+                else None
+            )
+        except Exception as e:
+            log.warning(f"    energy recompute failed after re-minimization: {e}")
+
     before = len(conformers)
     conformers = deduplicate_conformers(conformers, includes_enantiomer, ethr_kcal=CREGEN_ETHR)
     if len(conformers) < before:
@@ -232,7 +269,7 @@ def run_approach1(
             log.info(f"  Conformer search for {smi} (enantiomer: {has_enant}, ewin={ewin})...")
             try:
                 geom_3d, explicit_h_smi = smiles_to_3d(smi)
-                geom_opt = optimize(geom_3d, charge=q, solvent=solvent)
+                geom_opt, _ = optimize(geom_3d, charge=q, solvent=solvent)
                 try:
                     conformers = conformer_search(
                         geom_opt,
@@ -354,7 +391,7 @@ def _run_crest_pipeline_for_stereoisomer(
     Returns a dict mapping charge -> list of Microstates found.
     """
     # Optimize starting geometry
-    geom_opt = optimize(geom_3d, charge=ref_charge, solvent=solvent)
+    geom_opt, _ = optimize(geom_3d, charge=ref_charge, solvent=solvent)
 
     # Quick conformer pre-screen
     log.info(f"  Quick conformer pre-screen (mode={prescreen_mode})...")
@@ -438,7 +475,7 @@ def _run_crest_pipeline_for_stereoisomer(
                         f"      Conformer search failed for tautomer {fp[:8]}, "
                         f"falling back to single optimized geometry"
                     )
-                    geom_opt = optimize(representative, charge=q, solvent=solvent)
+                    geom_opt, _ = optimize(representative, charge=q, solvent=solvent)
                     total = single_point(geom_opt, charge=q, solvent=solvent)
                     gas_phase = single_point(geom_opt, charge=q, solvent=None)
                     conformers = [
