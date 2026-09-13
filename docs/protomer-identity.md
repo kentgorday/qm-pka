@@ -164,8 +164,35 @@ which is what decides which automorphic site the proton sits on.
 
 ### What is not repaired
 
-Three outcomes end in `excluded_conformers` rather than being dropped, so a run
+Four outcomes end in `excluded_conformers` rather than being dropped, so a run
 records what it computed and could not place:
+
+**A broken heavy-atom framework.** `heavy_components` splits the heavy-atom
+connectivity into connected components; more than one means the structure came
+apart, and the energy belongs to a complex rather than to the species its label
+names. This is checked *first*, in both approaches, because neither identity can
+see it. Approach 1 builds its key from the **template's** bonds and only the
+hydrogen counts from the coordinates, so breaking a C-O and pulling the fragment
+4 A away yields a byte-identical key. Approach 2 computes the framework for its
+parities but does not hash it, so a fragment and the intact species share a
+fingerprint — and at sampling they merge into one group, where the fragment can
+become the representative a full conformer search is run on.
+
+It is also the check a detached *hydrogen* cannot make: an oxygen that leaves
+takes its hydrogens with it, so every H stays ~0.97 A from a heavy atom and
+nothing looks wrong. Re-reading the first end-to-end batch, 6 of the 8
+`no_matching_microstate` exclusions were fragmentations that failed to match only
+by luck, plus one more that `proton_detached` had caught for the wrong reason;
+every conformer that was *kept* is single-component, so nothing previously
+retained becomes excluded. The criterion is the one `heavy_framework` already
+used for approach 2's ordering guard, so no new threshold is introduced.
+
+In approach 2 this runs as a pre-pass, ahead of `heavy_frameworks_agree`. That
+check is about heavy-atom *ordering*, and its response to a disagreement is to
+skip the whole charge state — so a fragment used to fail it for an unrelated
+reason and suppress migration repair for every intact conformer at that charge.
+Worse, the reference is whichever conformer is reached first, so a fragment
+arriving first made the healthy majority look like the disagreement.
 
 **A detached hydrogen.** The energy is real but belongs to a fragmented species.
 Two conformers in the first batch had hydrogens 5-6 A from every heavy atom, both
@@ -173,7 +200,8 @@ carrying Boltzmann weight 1.0.
 
 **No matching microstate.** Approach 1's microstate set is *prescribed* by the
 enumerator, and a geometry outside it cannot be labelled without perceiving bond
-orders from coordinates. C-protonated arenium is the observed case. Unlike every
+orders from coordinates. C-protonated arenium is the observed case; most of what
+used to land here was in fact fragmentation, and is now diagnosed as such. Unlike every
 other exclusion in the pipeline this one discards a valid energy for a real
 species; `multiplicity` records the size of the loss. Approach 2 has no such case:
 its microstates are *discovered* from the geometry, so an unseen identity opens
@@ -217,41 +245,135 @@ The geometry path cannot do the same. It compares *different protomers*, whose
 skeletons differ, so skeleton ranks are not comparable between them -- and there
 is no CIP descriptor to read from bare coordinates in any case. So stereo stays
 out of the protonation key and is applied only when the key leaves several
-candidates, by `resolve_stereo_candidates`: impose each candidate's bond orders
-on the coordinates, ask `AssignStereochemistryFrom3D` what configuration they
-show, and keep the candidate that agrees with itself. Each hypothesis is tested
-on its own bond orders, so the migration having invalidated the *source's* bond
-orders does not matter.
+candidates, by `match_to_candidate`: impose each candidate's own bond orders on
+the coordinates, ask `AssignStereochemistryFrom3D` what configuration they show,
+and keep the candidates that agree with themselves. Each hypothesis is tested on
+its own bond orders, so the migration having invalidated the *source's* bond
+orders does not matter -- no bond is ever perceived from coordinates.
 
-Which stereo elements enter that comparison is the whole difficulty. Three
-treatments, and each is load-bearing:
+Which stereo elements enter that comparison is the whole difficulty. Each
+candidate is scored on the **intersection** of two sets:
 
-**Decisive** -- the elements the candidates disagree on. Real values kept; these
-are what answer the question.
+**What the candidate specifies** -- `_specified_stereo` reads the template's own
+bond graph for double bonds carrying E/Z and heavy atoms carrying a chiral tag,
+keyed by heavy-atom position rather than atom index so the two sides are
+comparable. A bond that is *single* under this candidate's bond orders is free to
+rotate and has no configuration to state, so it never appears.
 
-**Non-discriminating** -- elements every candidate specifies identically. They
-cannot tell the candidates apart, and comparing them actively harms, in two ways.
-A microstate that stands for a collapsed enantiomeric pair
-(`includes_enantiomer`) writes one configuration but means both, so the geometry
-may legitimately show the other. And a migration can *create* a stereocentre:
-`N/C(=C/C(F)(F)F)C([OH2+])[OH2+]` has two identical substituents on that carbon,
-so it is not a centre until a proton leaves, and the source geometry never had an
-opinion about it. Demanding a match there rejects every candidate.
+**What the coordinates determine** -- the same reading taken from the mol after
+`AssignStereochemistryFrom3D`. Intersecting is what keeps two failure modes out.
+A migration can *create* a stereocentre -- `N/C(=C/C(F)(F)F)C([OH2+])[OH2+]` has
+two identical substituents on that carbon, so it is not a centre until a proton
+leaves -- and the candidate that does not constrain it must not be asked about
+it. Conversely `AssignStereochemistryFrom3D` annotates whatever the coordinates
+support, including bonds no label constrains: a protonated carbonyl is a
+stereogenic double bond, and demanding a match there would reject every
+candidate.
 
-Erasing them is the obvious move and it is wrong. A 1,4-ring carbon has two
-constitutionally identical branches, so it is a stereocentre only *relative to
-its partner*; erase the partner and RDKit drops the surviving tag when writing
-the SMILES, leaving cis and trans byte-identical. So they are **neutralised** --
-both sides forced to one arbitrary common tag -- which cancels them from the
-comparison while keeping the pair writable.
+Everything outside the intersection is **erased** before comparing, by
+`_stereo_signature`, which rewrites the mol to a canonical SMILES carrying only
+the selected elements. Erasing rather than comparing is the point: the
+comparison must not be able to fail on an element neither side was asserting.
 
-**Everything else** -- erased, because `AssignStereochemistryFrom3D` annotates
-whatever the coordinates support, including bonds no label constrains: a
-protonated carbonyl is a stereogenic double bond, and it would match nothing.
+An empty intersection is not a match on the merits. `match_to_candidate` returns
+a `verified` flag saying whether any element was actually compared, and
+`_repair_labelled` refuses to let an unverified candidate outrank a verified one
+-- a candidate constraining nothing cannot be contradicted, and would otherwise
+win every tie by default.
 
-One filter applies to the decisive bonds too: a bond that is *single* under a
-given candidate's bond orders is free to rotate and cannot testify, so it is
-dropped from that candidate's comparison rather than scored as a mismatch.
+When the microstate stands for a collapsed enantiomeric pair
+(`includes_enantiomer`) the mirror image is accepted too, because that is what
+the microstate means. `_mirror` inverts every tetrahedral tag and leaves E/Z
+alone: reflection inverts configuration at every centre but does not turn cis
+into trans, and inverting bond stereo as well would make the microstate accept
+the wrong diastereomer.
+
+### Atom ordering inside the tie-break
+
+The coordinates are attached to the candidate's template by *position*, with no
+substructure mapping at attach time: atom *i* of the laid-out geometry must be
+atom *i* of the template, hydrogens included. `_layouts_for_target` is what makes
+that true. It walks `_heavy_slots(target_template)` -- the template's atom layout,
+one entry per atom, `None` for a heavy atom and the owning heavy position for a
+hydrogen -- and fills each slot from the geometry, so a migrated conformer's
+hydrogens are regrouped into the destination's interleaving rather than kept in
+the source's.
+
+Hydrogens sharing one heavy atom are filled first-come, which is arbitrary among
+themselves and has no consequence: they are interchangeable by graph
+automorphism, so no descriptor anywhere in the molecule can depend on which is
+which. An atom carrying two or more hydrogens cannot be a tetrahedral centre,
+and the two hydrogens of a diastereotopic CH2 have equal canonical rank, so they
+cannot rank a neighbouring centre's substituents either. Permuting them leaves
+`_stereo_signature` byte-identical; there are regression tests.
+
+More than one layout is possible when the skeleton has an automorphism that
+preserves the hydrogen distribution, and then the choice is *not* free -- it
+decides which of two symmetry-related sites a proton sits on, and a
+pseudo-asymmetric centre reads differently under each. Matches are filtered to
+those preserving hydrogen counts, because the matcher ignores them and would
+otherwise map a protonated site onto an automorphic bare one.
+
+**When the geometry's positionwise hydrogen vector equals the target's, the
+identity layout is built directly and returned alone, and no search runs at all.**
+Equal vectors mean the two skeletons are the same graph, so the identity is an
+isomorphism; and because the geometry carries the source template's atom order
+and nothing in the pipeline permutes atoms, it is the correspondence the atoms
+actually have. The automorphisms are relabellings with no physical content for
+that conformer. Equal vectors also say no proton changed owner, so the search is
+needed only when one did -- which is the only situation in which a genuine
+ambiguity can arise.
+
+Constructing the identity rather than picking it out of the match results matters
+for two reasons beyond the cost. Correctness would otherwise depend on the
+identity appearing within `max_layouts`: a tris-CF3 alcohol's skeleton has 1296
+automorphisms against a cap of 64, so relying on it being among them rests on
+RDKit's match ordering rather than on anything guaranteed. And the cap warning is
+emitted before we know whether any automorphism matters, so a clean run would
+print an alarming line about orderings that were never needed. Over the whole
+first training batch -- 742 stored conformers -- `GetSubstructMatches` is now
+called zero times.
+
+This is *not* the `same_microstate` shortcut removed earlier. That one keyed on
+the protonation key, which is invariant under automorphism and so could not tell
+whether the hydrogens sat on the positions the template actually uses; the
+positionwise vector can, and is exactly what the hydrogen filter compares. The
+pseudo-asymmetry case that motivated removing the shortcut is a real migration,
+so its vector does not match and it still goes through the search -- there is a
+regression test pinning that.
+
+Why it matters: offering the automorphisms beside the identity let each candidate
+pick *its own* correspondence, since `match_to_candidate` returns on the first
+layout that agrees. "Verified" then meant only "there exists some correspondence
+under which this looks right", and two candidates could each find a different
+witness. For `O=C(O)/C=C(/[O-])O` the end-swapping automorphism seats the
+template's C=C on the coordinates of the C-C single bond, and
+`AssignStereochemistryFrom3D` duly reports an E/Z descriptor computed from a
+freely-rotating torsion: half of all torsions made the wrong isomer verify.
+Replaying the repair over the batch with the identity preferred takes the
+q=-1 counts from 16 undiscriminated ties to 0, and re-files 7 conformers the old
+code had left under the wrong label.
+
+Worth being exact about the consequence, because it is smaller than the defect
+suggests. The E and Z microstates there have identical `e_min`, so the
+misfiling shifted no energy window and deleted nothing; within a charge state the
+partition function sums flatly over microstates, and the two agree on
+`includes_enantiomer`. What it cost was noise in the logs and the loss of a
+decisive answer. The two conformers the batch *excluded* as ambiguous at q=-1 are
+a separate matter: both had protons that had genuinely moved onto symmetry-related
+oxygens, so the identity is invalid for them, the search still runs, and both
+candidates stay satisfiable. Recovering those needs the exclusion rule to soften
+where every viable candidate agrees on `includes_enantiomer`, which is not
+implemented.
+
+Because `observed` is a copy of the candidate template with new coordinates, the
+two sides of every comparison share one bond graph and one atom indexing. That is
+what makes the comparison safe: a chiral tag is a parity relative to the atom's
+stored neighbour order, and a bond's E/Z is relative to its stereo atoms, so
+neither is meaningful across differently-ordered mols. Sharing the graph also
+means `_specified_stereo` can key on the bond alone without recording its stereo
+atoms -- only its keys are used to choose what to compare, never its values, and
+the values are resolved through `MolToSmiles` in `_stereo_signature`.
 
 Ring cis/trans is worth calling out because it is not a classical stereocentre,
 yet the two diastereomers have identical hydrogen counts and therefore share a

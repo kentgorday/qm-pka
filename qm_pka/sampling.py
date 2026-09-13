@@ -35,7 +35,7 @@ from qm_pka.rdkit_utils import (
     validate_input_smiles,
 )
 from qm_pka.stereo import enumerate_and_deduplicate
-from qm_pka.tautomer_dedup import deduplicate_tautomers
+from qm_pka.tautomer_dedup import deduplicate_tautomers, heavy_components
 from qm_pka.thermo import quasi_rrho_free_energy
 from qm_pka.types import (
     ChargeState,
@@ -71,59 +71,34 @@ def _filter_by_energy_window(conformers: list[Conformer], ewin_kcal: float) -> l
     return [c for c, e in zip(conformers, effective, strict=True) if (e - e_min) <= ewin_hartree]
 
 
-def _dedupe_add_rrho_and_filter(
+def _reminimize(
     conformers: list[Conformer],
     charge: int,
     solvent: str | None,
-    ewin_kcal: float,
-    includes_enantiomer: bool = False,
-    *,
-    threads: int | None = None,
-) -> list[Conformer]:
-    """Deduplicate, then set the xTB quasi-RRHO correction, then filter.
+) -> None:
+    """Re-minimize CREST output at ``vtight`` and recompute its energies, in place.
 
-    Deduplication comes first so no Hessian is spent on a structure that is
-    another one relabelled. CREGEN has already removed most of these, but not
-    the ones needing a relabelling it does not search.
+    CREST's search leaves structures that xtb already calls converged at
+    `tight` -- one cycle, no movement, at every level up to it -- yet which
+    carry imaginary modes of a few hundred wavenumbers. Only `vtight` rejects
+    them, and then it takes tens of cycles and moves half an angstrom. Measured
+    on the first validation molecule, this removed 8 of 12 such modes and
+    recovered up to 4.5 kcal/mol of electronic energy, which is enough to
+    reorder a 10 kcal/mol window.
 
-    The energy criterion is applied alongside the RMSD one here: CREST
-    geometries are not converged tightly enough for proximity alone to mean two
-    structures share a well.
+    This is the **last** thing that moves a sampling geometry, and it must stay
+    that way: `repair_migrated_conformers` reads protonation off coordinates, so
+    running it before this step checks an identity that half an angstrom of
+    relaxation can still invalidate -- and then the conformer carries a wrong
+    label through deduplication, its Hessian, and the energy window, with
+    nothing noticing until refinement. Callers re-minimize first, check identity
+    second, and only then deduplicate.
 
-    A plain numerical Hessian (``--hess``) is used: sampling geometries are xTB
-    minima (CREST-optimized), so no biasing is needed.
-
-    A conformer whose Hessian fails is carried through to refinement but takes
-    no part in the energy window. It cannot be *compared*: ``free_energy`` sums
-    non-None components, so without RRHO it is short a term worth 11-114
-    kcal/mol against an ensemble whose real spread is a few kcal/mol. Left in
-    the comparison it becomes ``e_min`` and the window evicts every genuine
-    conformer of the microstate -- one failed Hessian wiping out the whole
-    microstate before refinement ever sees it.
-
-    Excluding it outright would be too heavy here, unlike at refinement: this
-    RRHO is only a cheap pre-filter estimate and refinement recomputes it on the
-    DFT geometry, so the gap closes by itself. Passing it through does leave it
-    with ``rrho_correction=None`` during refinement's deduplication, which ranks
-    on ``free_energy`` and would favour it as representative -- harmless, since
-    that only picks between near-identical structures, and refinement either
-    recomputes its RRHO or excludes it.
+    A conformer that fails to converge is kept, carrying xtb's last step, for
+    the reason refinement keeps its own: an unminimized geometry sits above its
+    true minimum, so it is under-weighted rather than dominant, and dropping it
+    would lose a conformer over a numerical outcome.
     """
-    # Re-minimize before anything compares or differentiates these. CREST's
-    # search leaves structures that xtb already calls converged at `tight` --
-    # one cycle, no movement, at every level up to it -- yet which carry
-    # imaginary modes of a few hundred wavenumbers. Only `vtight` rejects them,
-    # and then it takes tens of cycles and moves half an angstrom. Both steps
-    # below assume a stationary point: the deduplication compares geometries,
-    # and a numerical Hessian on a non-stationary structure reports the residual
-    # gradient as imaginary frequencies. Measured on the first validation
-    # molecule, this removed 8 of 12 such modes and recovered up to 4.5 kcal/mol
-    # of electronic energy, which is enough to reorder a 10 kcal/mol window.
-    #
-    # A conformer that fails to converge is kept, carrying xtb's last step, for
-    # the reason refinement keeps its own: an unminimized geometry sits above
-    # its true minimum, so it is under-weighted rather than dominant, and
-    # dropping it would lose a conformer over a numerical outcome.
     for conf in conformers:
         try:
             geom, converged = optimize(
@@ -146,6 +121,51 @@ def _dedupe_add_rrho_and_filter(
         except Exception as e:
             log.warning(f"    energy recompute failed after re-minimization: {e}")
 
+
+def _dedupe_add_rrho_and_filter(
+    conformers: list[Conformer],
+    charge: int,
+    solvent: str | None,
+    ewin_kcal: float,
+    includes_enantiomer: bool = False,
+    *,
+    threads: int | None = None,
+) -> list[Conformer]:
+    """Deduplicate, then set the xTB quasi-RRHO correction, then filter.
+
+    Expects geometries that `_reminimize` has already relaxed and
+    `repair_migrated_conformers` has already filed correctly; both steps assume
+    a stationary point, and this one assumes a settled label.
+
+    Deduplication comes first so no Hessian is spent on a structure that is
+    another one relabelled. CREGEN has already removed most of these, but not
+    the ones needing a relabelling it does not search.
+
+    The energy criterion is applied alongside the RMSD one here: CREST
+    geometries are not converged tightly enough for proximity alone to mean two
+    structures share a well.
+
+    A plain numerical Hessian (``--hess``) is used: sampling geometries are xTB
+    minima, so no biasing is needed -- and a numerical Hessian on a
+    non-stationary structure would report the residual gradient as imaginary
+    frequencies, which is why `_reminimize` runs first.
+
+    A conformer whose Hessian fails is carried through to refinement but takes
+    no part in the energy window. It cannot be *compared*: ``free_energy`` sums
+    non-None components, so without RRHO it is short a term worth 11-114
+    kcal/mol against an ensemble whose real spread is a few kcal/mol. Left in
+    the comparison it becomes ``e_min`` and the window evicts every genuine
+    conformer of the microstate -- one failed Hessian wiping out the whole
+    microstate before refinement ever sees it.
+
+    Excluding it outright would be too heavy here, unlike at refinement: this
+    RRHO is only a cheap pre-filter estimate and refinement recomputes it on the
+    DFT geometry, so the gap closes by itself. Passing it through does leave it
+    with ``rrho_correction=None`` during refinement's deduplication, which ranks
+    on ``free_energy`` and would favour it as representative -- harmless, since
+    that only picks between near-identical structures, and refinement either
+    recomputes its RRHO or excludes it.
+    """
     before = len(conformers)
     conformers = deduplicate_conformers(conformers, includes_enantiomer, ethr_kcal=CREGEN_ETHR)
     if len(conformers) < before:
@@ -306,22 +326,25 @@ def run_approach1(
                 log.warning(f"    Failed for {smi}: {e}")
                 continue
 
+        # Re-minimize before checking identity, not after: `vtight` is the last
+        # thing that moves a sampling geometry, and a proton that migrates
+        # during it would otherwise go unnoticed until refinement -- after the
+        # conformer had been deduplicated, given a Hessian, and passed through
+        # the energy window under the wrong label.
+        for ms in microstates:
+            _reminimize(ms.conformers, q, solvent)
+
         cs = ChargeState(charge=q, microstates=microstates)
 
         # Re-file before deduplicating, for the same reason deduplication
         # precedes the Hessians: a conformer whose proton moved during the CREST
-        # optimization is another microstate's structure under the wrong label,
-        # and moving it first lets it collapse against that microstate's own
-        # conformers rather than buying a Hessian -- and later a DFT
-        # optimization -- for a duplicate.
+        # optimization or the re-minimization is another microstate's structure
+        # under the wrong label, and moving it first lets it collapse against
+        # that microstate's own conformers rather than buying a Hessian -- and
+        # later a DFT optimization -- for a duplicate.
         report = repair_migrated_conformers(cs, stage="sampling")
-        if report.touched:
-            log.info(
-                f"  q={q}: {report.moved} conformer(s) re-filed after a proton moved"
-                f"{f', {report.detached} with a detached H' if report.detached else ''}"
-                f"{f', {report.unmatched} matching no microstate' if report.unmatched else ''}"
-                f"{f', {report.ambiguous} ambiguous' if report.ambiguous else ''}"
-            )
+        if (summary := report.summary()) is not None:
+            log.info(f"  q={q}: {summary}")
 
         for ms in cs.microstates:
             try:
@@ -448,8 +471,22 @@ def _run_crest_pipeline_for_stereoisomer(
                 log.warning(f"    CREST tautomerization failed for one structure at charge {q}")
         log.info(f"    {len(all_tautomers)} total structure(s) after tautomerization")
 
+        # Drop anything that came apart before grouping. The fingerprint hashes
+        # hydrogen counts and parities but *not* connectivity, so a fragment and
+        # the intact species share an id: left in, it merges into a real
+        # tautomer's group and can become the representative its full conformer
+        # search is run on. There is no microstate to record it against yet --
+        # these are bare geometries from the charge walk -- so it is logged and
+        # dropped, as CREST's own failures are here.
+        intact = [geom for geom in all_tautomers if len(heavy_components(geom)) == 1]
+        if len(intact) < len(all_tautomers):
+            log.warning(
+                f"    dropped {len(all_tautomers) - len(intact)} fragmented structure(s) "
+                f"at charge {q}"
+            )
+
         # Deduplicate by H-assignment fingerprint
-        groups = deduplicate_tautomers(all_tautomers)
+        groups = deduplicate_tautomers(intact)
         log.info(f"    {len(groups)} unique tautomer(s) after deduplication")
 
         computed_geoms[q] = [geoms[0] for geoms in groups.values()]
@@ -496,19 +533,22 @@ def _run_crest_pipeline_for_stereoisomer(
                 log.warning(f"      Failed for tautomer {fp[:8]}: {e}")
                 continue
 
-        # The conformer search can move a proton just as the charge-state walk
-        # can, and a structure that came back a different tautomer is filed
-        # under this fingerprint until something checks. Re-file before
-        # deduplicating so it collapses against its real siblings rather than
-        # buying a Hessian here and a DFT optimization later.
+        # Re-minimize first: `vtight` is the last thing that moves a sampling
+        # geometry, so an identity read before it can still be invalidated by
+        # half an angstrom of relaxation.
+        for ms in microstates:
+            _reminimize(ms.conformers, q, solvent)
+
+        # The conformer search and the re-minimization can both move a proton,
+        # just as the charge-state walk can, and a structure that came back a
+        # different tautomer is filed under this fingerprint until something
+        # checks. Re-file before deduplicating so it collapses against its real
+        # siblings rather than buying a Hessian here and a DFT optimization
+        # later.
         cs = ChargeState(charge=q, microstates=microstates)
         report = repair_migrated_conformers(cs, stage="sampling")
-        if report.touched:
-            log.info(
-                f"    q={q}: {report.moved} conformer(s) re-filed after a proton moved"
-                f"{f', {report.created} new tautomer(s) opened' if report.created else ''}"
-                f"{f', {report.detached} with a detached H' if report.detached else ''}"
-            )
+        if (summary := report.summary()) is not None:
+            log.info(f"    q={q}: {summary}")
 
         for ms in cs.microstates:
             try:

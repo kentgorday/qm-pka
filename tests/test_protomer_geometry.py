@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import itertools
+import logging
 from typing import ClassVar
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -11,8 +14,14 @@ from rdkit import Chem
 from qm_pka.ensemble import deduplicate_conformers
 from qm_pka.protomer_geometry import (
     DETACHED_DISTANCE,
+    MigrationReport,
+    _heavy_slots,
+    _layouts_for_target,
+    _skeleton_mol,
     _specified_stereo,
+    _stereo_from_coordinates,
     _stereo_signature,
+    _template_counts,
     assign_protons,
     match_to_candidate,
     protonation_key_from_geometry,
@@ -21,12 +30,12 @@ from qm_pka.protomer_geometry import (
     template_from_smiles,
 )
 from qm_pka.rdkit_utils import canonical_smiles, smiles_to_3d
-from qm_pka.tautomer_dedup import geometric_fingerprint
+from qm_pka.tautomer_dedup import geometric_fingerprint, heavy_components
 from qm_pka.types import ChargeState, Conformer, Geometry, Microstate
 
 
-def _embed(smiles: str) -> tuple[Geometry, str]:
-    return smiles_to_3d(smiles)
+def _embed(smiles: str, seed: int | None = None) -> tuple[Geometry, str]:
+    return smiles_to_3d(smiles, seed=seed)
 
 
 def _move_h(geom: Geometry, h_index: int, target_heavy: int, dist: float = 1.02) -> Geometry:
@@ -37,6 +46,56 @@ def _move_h(geom: Geometry, h_index: int, target_heavy: int, dist: float = 1.02)
     norm = float(np.linalg.norm(outward))
     outward = outward / norm if norm > 1e-6 else np.array([1.0, 0.0, 0.0])
     coords[h_index] = coords[target_heavy] + dist * outward
+    return Geometry(symbols=tuple(geom.symbols), coords=coords)
+
+
+def _rotate_branch(
+    geom: Geometry,
+    axis_from: int,
+    axis_to: int,
+    branch: tuple[int, ...],
+    degrees: float,
+) -> Geometry:
+    """Turn one branch about a bond, as a conformational change would.
+
+    Positions are heavy-atom positions; the hydrogens each branch atom owns come
+    with it. Nothing about the configuration changes, so every identity question
+    must give the same answer before and after.
+    """
+    coords = geom.coords.copy()
+    heavy = geom.heavy_atom_indices
+    owner = dict(zip(geom.hydrogen_indices, assign_protons(geom).owner, strict=True))
+    moving = {heavy[p] for p in branch}
+    moving |= {h for h, o in owner.items() if o in moving}
+
+    origin = coords[heavy[axis_to]]
+    axis = origin - coords[heavy[axis_from]]
+    axis = axis / float(np.linalg.norm(axis))
+    theta = np.radians(degrees)
+    cross = np.array(
+        [[0.0, -axis[2], axis[1]], [axis[2], 0.0, -axis[0]], [-axis[1], axis[0], 0.0]]
+    )
+    rotation = np.eye(3) + np.sin(theta) * cross + (1 - np.cos(theta)) * (cross @ cross)
+    for i in moving:
+        if i == heavy[axis_to]:
+            continue
+        coords[i] = origin + rotation @ (coords[i] - origin)
+    return Geometry(symbols=tuple(geom.symbols), coords=coords)
+
+
+def _break_a_bond(geom: Geometry, heavy_position: int, shift: float = 4.0) -> Geometry:
+    """Pull one heavy atom away, taking its hydrogens with it.
+
+    No hydrogen ends up far from a heavy atom, so `ProtonAssignment.is_intact`
+    stays true -- which is exactly the case the connectivity check exists for.
+    """
+    coords = geom.coords.copy()
+    target = geom.heavy_atom_indices[heavy_position]
+    offset = np.array([shift, 0.0, 0.0])
+    coords[target] += offset
+    for h_index, owner in zip(geom.hydrogen_indices, assign_protons(geom).owner, strict=True):
+        if owner == target:
+            coords[h_index] += offset
     return Geometry(symbols=tuple(geom.symbols), coords=coords)
 
 
@@ -132,8 +191,10 @@ class TestAutomorphicSitesShareAKey:
         assert protonation_key_from_mol(a, 1) != protonation_key_from_mol(b, 1)
 
 
-def _microstate(smiles: str, conformers: list[Conformer] | None = None) -> Microstate:
-    geom, explicit = _embed(smiles)
+def _microstate(
+    smiles: str, conformers: list[Conformer] | None = None, seed: int | None = None
+) -> Microstate:
+    geom, explicit = _embed(smiles, seed=seed)
     return Microstate(
         tautomer_id=smiles,
         conformers=conformers if conformers is not None else [Conformer(geometry=geom)],
@@ -550,6 +611,199 @@ class TestMatchToCandidate:
         assert match_to_candidate(geom, assignment, own, mirror, True) is not None
 
 
+class TestFragmentationIsExcluded:
+    """A broken heavy-atom bond is invisible to both identities.
+
+    Approach 1 reads its framework from the *template* and only the hydrogen
+    counts from the coordinates; approach 2 computes the framework but does not
+    hash it. So in both, a structure that came apart produces the identity of
+    the intact species and is filed as though nothing happened.
+    """
+
+    def test_a_broken_bond_leaves_every_hydrogen_attached(self) -> None:
+        """The premise: `is_intact` cannot catch this, so something else must."""
+        geom, _ = _embed("OC=O")
+        broken = _break_a_bond(geom, 0)
+        assert assign_protons(broken).is_intact
+        assert len(heavy_components(geom)) == 1
+        assert len(heavy_components(broken)) == 2
+
+    def test_the_protonation_key_cannot_tell_the_difference(self) -> None:
+        geom, explicit = _embed("OC=O")
+        template = template_from_smiles(explicit)
+        broken = _break_a_bond(geom, 0)
+        assert protonation_key_from_geometry(broken, template, 0) == protonation_key_from_geometry(
+            geom, template, 0
+        )
+
+    def test_the_fingerprint_cannot_tell_the_difference(self) -> None:
+        geom, _ = _embed("OC=O")
+        assert geometric_fingerprint(_break_a_bond(geom, 0)) == geometric_fingerprint(geom)
+
+    def test_a_single_heavy_atom_is_not_a_fragment(self) -> None:
+        geom, _ = _embed("O")
+        assert len(heavy_components(geom)) == 1
+
+    def test_approach_one_excludes_it(self) -> None:
+        geom, explicit = _embed("OC=O")
+        ms = Microstate(
+            tautomer_id="OC=O",
+            conformers=[Conformer(geometry=_break_a_bond(geom, 0))],
+            smiles=explicit,
+        )
+        report = repair_migrated_conformers(
+            ChargeState(charge=0, microstates=[ms]), stage="refinement"
+        )
+        assert report.fragmented == 1
+        assert ms.conformers == []
+        assert [e.reason for e in ms.excluded_conformers] == ["fragmented"]
+
+    def test_approach_two_excludes_it(self) -> None:
+        geom, _ = _embed("OC=O")
+        broken = _break_a_bond(geom, 0)
+        ms = Microstate(
+            tautomer_id=geometric_fingerprint(broken), conformers=[Conformer(geometry=broken)]
+        )
+        report = repair_migrated_conformers(
+            ChargeState(charge=0, microstates=[ms]), stage="sampling"
+        )
+        assert report.fragmented == 1
+        assert ms.conformers == []
+        assert [e.reason for e in ms.excluded_conformers] == ["fragmented"]
+
+    def test_one_fragment_no_longer_disables_the_check_for_everyone_else(self) -> None:
+        """The fail-open this replaces.
+
+        `heavy_frameworks_agree` is about heavy-atom *ordering*, and its response
+        to a disagreement is to skip the whole charge state. A fragment failed it
+        for an unrelated reason, so a single broken structure suppressed
+        migration repair for every intact conformer at that charge -- and since
+        the reference is whichever conformer comes first, a fragment arriving
+        first made the healthy majority look like the disagreement.
+        """
+        methanol, _ = _embed("CO")
+        oxygen = methanol.heavy_atom_indices[1]
+        hydroxyl = next(h for h in methanol.hydrogen_indices if _owner_of(methanol, h) == oxygen)
+        migrated = _move_h(methanol, hydroxyl, methanol.heavy_atom_indices[0])
+        assert geometric_fingerprint(migrated) != geometric_fingerprint(methanol)
+
+        # The fragment is deliberately first, so it would have become the reference.
+        source = Microstate(
+            tautomer_id=geometric_fingerprint(methanol),
+            conformers=[
+                Conformer(geometry=_break_a_bond(methanol, 1)),
+                Conformer(geometry=migrated),
+            ],
+        )
+        cs = ChargeState(charge=0, microstates=[source])
+        report = repair_migrated_conformers(cs, stage="sampling")
+
+        assert report.fragmented == 1
+        assert report.created == 1, "the intact conformer must still be re-filed"
+        assert [e.reason for e in source.excluded_conformers] == ["fragmented"]
+        assert len(cs.microstates) == 2
+
+
+class TestLayoutPutsAtomsInTheTemplateOrder:
+    """`_stereo_from_coordinates` attaches coordinates by position, not by mapping.
+
+    Atom *i* of the laid-out geometry has to be atom *i* of the template --
+    hydrogens included, since a chiral tag is a parity over the atom's stored
+    neighbour order. `_layouts_for_target` is the only thing establishing that.
+    """
+
+    @staticmethod
+    def _signature(template: Chem.Mol, laid_out: Geometry) -> str:
+        observed = _stereo_from_coordinates(template, laid_out)
+        obs_bonds, obs_atoms = _specified_stereo(observed)
+        spec_bonds, spec_atoms = _specified_stereo(template)
+        return _stereo_signature(
+            observed, set(spec_bonds) & set(obs_bonds), set(spec_atoms) & set(obs_atoms)
+        )
+
+    @pytest.mark.parametrize("smiles", ["C[C@H](N)CO", "C[C@H](O)[C@@H](N)CO"])
+    def test_a_layout_reproduces_the_template_atom_order(self, smiles: str) -> None:
+        geom, explicit = _embed(smiles)
+        template = template_from_smiles(explicit)
+        layouts = _layouts_for_target(geom, assign_protons(geom), template, template)
+        expected = tuple(a.GetSymbol() for a in template.GetAtoms())
+        assert layouts, "a geometry must lay out against its own template"
+        for laid_out in layouts:
+            assert laid_out.symbols == expected
+
+    @pytest.mark.parametrize(
+        "smiles",
+        [
+            "C[C@H](N)CO",  # a diastereotopic CH2 next to a stereocentre
+            "C[C@H](O)[C@@H](N)CO",  # two centres, CH2 between substituents
+            "O=C(O)/C=C/[C@H](C)O",  # a stereo double bond as well
+        ],
+    )
+    def test_permuting_hydrogens_on_one_heavy_atom_changes_nothing(self, smiles: str) -> None:
+        """Hydrogens sharing a heavy atom are filled first-come, which is arbitrary.
+
+        It is also inconsequential: they are interchangeable by automorphism, so
+        no descriptor anywhere can depend on which is which. An atom carrying two
+        or more hydrogens cannot be a tetrahedral centre, and a diastereotopic
+        CH2's hydrogens have equal canonical rank, so they cannot rank a
+        neighbouring centre's substituents either.
+        """
+        geom, explicit = _embed(smiles)
+        template = template_from_smiles(explicit)
+        laid_out = _layouts_for_target(geom, assign_protons(geom), template, template)[0]
+        baseline = self._signature(template, laid_out)
+
+        owned: dict[int, list[int]] = {}
+        for idx, owner in enumerate(_heavy_slots(template)):
+            if owner is not None:
+                owned.setdefault(owner, []).append(idx)
+        shared = [group for group in owned.values() if len(group) > 1]
+        assert shared, "this molecule must have a heavy atom carrying several hydrogens"
+
+        for group in shared:
+            for permuted in itertools.permutations(group):
+                coords = laid_out.coords.copy()
+                for destination, source in zip(group, permuted, strict=True):
+                    coords[destination] = laid_out.coords[source]
+                swapped = Geometry(symbols=laid_out.symbols, coords=coords)
+                assert self._signature(template, swapped) == baseline
+
+
+class TestMigrationReport:
+    def test_an_ambiguous_exclusion_counts_as_touched(self) -> None:
+        """It excludes a conformer, so a summary that omits it hides a real loss.
+
+        Malonic acid at q=-1 lost both conformers of a microstate this way and
+        printed no summary line at all.
+        """
+        assert MigrationReport(checked=3, ambiguous=2).touched == 2
+
+    def test_a_report_with_nothing_to_say_summarises_to_none(self) -> None:
+        assert MigrationReport(checked=9).summary() is None
+
+    def test_every_outcome_reaches_the_summary(self) -> None:
+        report = MigrationReport(
+            checked=9,
+            moved=1,
+            detached=2,
+            unmatched=3,
+            ambiguous=4,
+            unresolved_tie=5,
+            stereo_unmatched=6,
+            created=7,
+        )
+        summary = report.summary()
+        assert summary is not None
+        for count in ("1", "2", "3", "4", "5", "6", "7"):
+            assert count in summary
+
+    def test_a_conformer_left_in_place_still_gets_reported(self) -> None:
+        """`unresolved_tie` moves nothing, so it is not `touched` -- but it is news."""
+        report = MigrationReport(checked=4, unresolved_tie=4)
+        assert report.touched == 0
+        assert report.summary() is not None
+
+
 class TestRingStereoIsResolved:
     """1,4-ring cis/trans: a relationship carried by a *pair* of atoms.
 
@@ -736,14 +990,156 @@ class TestPseudoAsymmetry:
         assert len(target.conformers) == 1
 
 
+class TestTheIdentityFastPathSkipsTheSearch:
+    """The automorphism search is not merely deprioritised, it is not run.
+
+    Two things ride on this. Correctness must not depend on the identity
+    appearing within `max_layouts` -- on a tris-CF3 alcohol the skeleton has 1296
+    automorphisms against a cap of 64, so finding the identity inside the results
+    would rest on RDKit's match ordering rather than on anything guaranteed. And
+    the cap warning must stay quiet on clean runs: emitted before we know whether
+    any automorphism matters, it printed an alarming line about orderings that
+    were never needed.
+    """
+
+    SYMMETRIC: ClassVar[str] = "OC(C(F)(F)F)(C(F)(F)F)C(F)(F)F"
+
+    @staticmethod
+    def _layouts_counting_searches(smiles: str) -> tuple[int, int]:
+        geom, explicit_h = _embed(smiles, seed=1)
+        template = template_from_smiles(explicit_h)
+        searches = 0
+        real = Chem.Mol.GetSubstructMatches
+
+        def spy(self: Chem.Mol, *args: object, **kwargs: object) -> object:
+            nonlocal searches
+            searches += 1
+            return real(self, *args, **kwargs)
+
+        with mock.patch.object(Chem.Mol, "GetSubstructMatches", spy):
+            layouts = _layouts_for_target(geom, assign_protons(geom), template, template)
+        return len(layouts), searches
+
+    def test_the_skeleton_really_is_badly_symmetric(self) -> None:
+        """Guards the test: a molecule with few automorphisms would prove nothing."""
+        _, explicit_h = _embed(self.SYMMETRIC, seed=1)
+        template = template_from_smiles(explicit_h)
+        skeleton = _skeleton_mol(template, _template_counts(template))
+        uncapped = skeleton.GetSubstructMatches(
+            skeleton, uniquify=False, useChirality=False, maxMatches=10_000_000
+        )
+        assert len(uncapped) > 64, "must exceed the cap for this test to mean anything"
+
+    def test_no_search_runs_when_no_proton_moved(self) -> None:
+        layouts, searches = self._layouts_counting_searches(self.SYMMETRIC)
+        assert searches == 0, "the identity is built directly, not found in a search"
+        assert layouts == 1
+
+    def test_the_cap_warning_stays_quiet(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="qm_pka.protomer_geometry"):
+            self._layouts_counting_searches(self.SYMMETRIC)
+        assert "hit its cap" not in caplog.text
+
+    def test_the_search_still_runs_once_a_proton_has_moved(self) -> None:
+        """The slow path is reached exactly when it is needed."""
+        source = _microstate(r"O=C(O)/C=C(/[O-])O", seed=1)
+        geom = source.conformers[0].geometry
+        heavy = geom.heavy_atom_indices
+        owner = dict(zip(geom.hydrogen_indices, assign_protons(geom).owner, strict=True))
+        hydroxyl_h = next(h for h, o in owner.items() if o == heavy[6])
+        migrated = _move_h(geom, hydroxyl_h, heavy[5], dist=0.98)
+        template = template_from_smiles(source.smiles or "")
+        assert assign_protons(migrated).counts != _template_counts(template)
+
+        searches = 0
+        real = Chem.Mol.GetSubstructMatches
+
+        def spy(self: Chem.Mol, *args: object, **kwargs: object) -> object:
+            nonlocal searches
+            searches += 1
+            return real(self, *args, **kwargs)
+
+        with mock.patch.object(Chem.Mol, "GetSubstructMatches", spy):
+            layouts = _layouts_for_target(migrated, assign_protons(migrated), template, template)
+        assert searches == 1
+        assert len(layouts) == 2, "both ends of the automorphism are offered"
+
+
+class TestATorsionCannotDecideIdentity:
+    """The property the identity preference exists to guarantee.
+
+    Configuration is not a function of a rotatable dihedral, so turning one must
+    not change any identity verdict. On the previous code this failed loudly:
+    `O=C(O)/C=C(/[O-])O` has an end-swapping skeleton automorphism whose layout
+    seats the template's C=C on the coordinates of the C-C single bond, and
+    `AssignStereochemistryFrom3D` reports an E/Z descriptor for it. Half of all
+    torsions made the wrong isomer verify.
+    """
+
+    E: ClassVar[str] = r"O=C(O)/C=C(/[O-])O"
+    Z: ClassVar[str] = r"O=C(O)/C=C(\[O-])O"
+
+    # Heavy positions: 1 is the acid carbon, 3 the middle carbon. The 1-3 bond is
+    # single and free to rotate; the acid end (0, 1, 2) is the branch it carries.
+    AXIS: ClassVar[tuple[int, int]] = (3, 1)
+    BRANCH: ClassVar[tuple[int, ...]] = (0, 1, 2)
+
+    @pytest.mark.parametrize("degrees", [0, 45, 90, 135, 180, 225, 270, 315])
+    def test_the_verdict_is_invariant_under_rotation(self, degrees: int) -> None:
+        source = _microstate(self.E, seed=1)
+        other = _microstate(self.Z, conformers=[])
+        source.conformers[0].geometry = _rotate_branch(
+            source.conformers[0].geometry, *self.AXIS, self.BRANCH, degrees
+        )
+
+        report = repair_migrated_conformers(
+            ChargeState(charge=-1, microstates=[source, other]), stage="sampling"
+        )
+
+        assert report.moved == 0, "a rotation is not a migration"
+        assert report.unresolved_tie == 0, "a torsion must not make Z satisfiable"
+        assert report.ambiguous == 0
+        assert len(source.conformers) == 1
+        assert other.conformers == []
+
+    @pytest.mark.parametrize("degrees", [0, 45, 90, 135, 180, 225, 270, 315])
+    def test_only_the_true_isomer_verifies_at_every_torsion(self, degrees: int) -> None:
+        """Stated on `match_to_candidate` directly, so the cause is pinned too."""
+        geom, explicit_h = _embed(self.E, seed=1)
+        template_e = template_from_smiles(explicit_h)
+        template_z = template_from_smiles(_embed(self.Z, seed=1)[1])
+        turned = _rotate_branch(geom, *self.AXIS, self.BRANCH, degrees)
+        assignment = assign_protons(turned)
+
+        matched_e = match_to_candidate(turned, assignment, template_e, template_e, False)
+        matched_z = match_to_candidate(turned, assignment, template_e, template_z, False)
+
+        assert matched_e is not None and matched_e[1] is True
+        assert matched_z is None, "the Z template must not verify against an E geometry"
+
+    def test_the_rotation_really_does_turn_a_rotatable_bond(self) -> None:
+        """Guards the test itself: a no-op rotation would prove nothing."""
+        geom, _ = _embed(self.E, seed=1)
+        turned = _rotate_branch(geom, *self.AXIS, self.BRANCH, 180)
+        heavy = geom.heavy_atom_indices
+        moved = float(np.linalg.norm(turned.coords[heavy[0]] - geom.coords[heavy[0]]))
+        assert moved > 1.0, "the carbonyl oxygen should swing right across"
+        # ... and the configuration is untouched, which is the whole premise.
+        assert assign_protons(turned).counts == assign_protons(geom).counts
+
+
 class TestAnUndiscriminatedTie:
     """Two microstates a skeleton automorphism makes interchangeable.
 
     In `O=C(O)/C=C(/[O-])O` both terminal carbons are "two oxygens plus the
     middle carbon", so the skeleton has an end-swapping automorphism that is not
-    a symmetry of the stereochemistry. E and Z share a hydrogen distribution, so
-    both atom correspondences are valid for both candidates and nothing here
-    separates them.
+    a symmetry of the stereochemistry.
+
+    That automorphism is only *reachable* once a proton has moved. While the
+    hydrogen distribution still matches the template positionwise, the identity
+    correspondence is the one the atoms have, and it separates E from Z cleanly
+    -- so a conformer that merely rotated never ties. A tie needs a genuine
+    migration onto a symmetry-related site, which is what the second test does.
     """
 
     E: ClassVar[str] = r"O=C(O)/C=C(/[O-])O"
@@ -752,17 +1148,95 @@ class TestAnUndiscriminatedTie:
     def test_they_are_separate_microstates(self) -> None:
         assert canonical_smiles(self.E) != canonical_smiles(self.Z)
 
-    def test_the_conformer_stays_where_it_is_rather_than_being_excluded(self) -> None:
-        """A failure to discriminate is not evidence of a change."""
-        source = _microstate(self.E)
+    # Whether a conformer tied used to depend on its geometry: surveyed over 79
+    # embeddings, 44 matched E alone and 35 tied, the split being set by a
+    # torsion angle. Preferring the identity correspondence removed that
+    # dependence, so every seed now decides -- see
+    # `test_an_unmigrated_conformer_never_ties`, which pins the seeds that used
+    # to tie, and `TestATorsionCannotDecideIdentity` for the mechanism.
+    DECIDES: ClassVar[int] = 1
+
+    @pytest.mark.parametrize("seed", [1, 2, 3, 4, 6, 8, 10, 16])
+    def test_the_conformer_is_never_moved_or_excluded(self, seed: int) -> None:
+        """A failure to discriminate is not evidence of a change.
+
+        The invariant holds for every geometry, whichever route reaches it: the
+        conformer stays under the label it arrived with, and nothing is lost.
+        Excluding here would discard a real energy over an ambiguity that cannot
+        change the answer -- `charge_state_free_energy` sums flatly over
+        microstates, and these two agree on `includes_enantiomer`.
+        """
+        source = _microstate(self.E, seed=seed)
         other = _microstate(self.Z, conformers=[])
 
         cs = ChargeState(charge=-1, microstates=[source, other])
         report = repair_migrated_conformers(cs, stage="sampling")
 
-        assert report.unresolved_tie == 1
-        assert report.ambiguous == 0
         assert report.moved == 0
+        assert report.ambiguous == 0
         assert len(source.conformers) == 1
         assert source.excluded_conformers == []
         assert other.conformers == []
+
+    @pytest.mark.parametrize("seed", [1, 2, 3, 4, 6, 8, 10, 16])
+    def test_an_unmigrated_conformer_never_ties(self, seed: int) -> None:
+        """The identity correspondence decides, so there is nothing to report.
+
+        Before the identity was preferred, each candidate chose whichever of the
+        two layouts made it look right, and Z could verify against a torsion
+        angle. Both candidates then "verified" and the conformer tied.
+        """
+        source = _microstate(self.E, seed=seed)
+        other = _microstate(self.Z, conformers=[])
+
+        report = repair_migrated_conformers(
+            ChargeState(charge=-1, microstates=[source, other]), stage="sampling"
+        )
+
+        assert report.unresolved_tie == 0
+        assert report.summary() is None
+        assert len(source.conformers) == 1
+
+    def test_a_migration_onto_a_symmetry_related_site_still_ties(self) -> None:
+        """The tie branch is still reachable, and still reports.
+
+        Handing the enol hydroxyl's proton to the carboxylate oxygen at the same
+        end gives hydrogen vector (0, 0, 1, 1, 0, 1, 0) -- the vector carried by
+        one of the two conformers the first training batch excluded as ambiguous
+        at q=-1. The identity is no longer valid, the automorphism search runs,
+        and both candidates stay satisfiable.
+        """
+        source = _microstate(self.E, seed=1)
+        other = _microstate(self.Z, conformers=[])
+        geom = source.conformers[0].geometry
+        heavy = geom.heavy_atom_indices
+        owner = dict(zip(geom.hydrogen_indices, assign_protons(geom).owner, strict=True))
+        hydroxyl_h = next(h for h, o in owner.items() if o == heavy[6])
+        source.conformers[0].geometry = _move_h(geom, hydroxyl_h, heavy[5], dist=0.98)
+        assert assign_protons(source.conformers[0].geometry).counts == (0, 0, 1, 1, 0, 1, 0)
+
+        report = repair_migrated_conformers(
+            ChargeState(charge=-1, microstates=[source, other]), stage="sampling"
+        )
+
+        assert report.unresolved_tie == 1
+        summary = report.summary()
+        assert summary is not None and "indistinguishable" in summary
+        assert len(source.conformers) == 1, "a tie keeps the conformer where it is"
+        assert source.excluded_conformers == []
+
+    def test_a_geometry_only_its_own_label_admits_is_kept_quietly(self) -> None:
+        """The other route: one candidate verifies, and it is where the conformer sits.
+
+        Nothing was re-filed and nothing was lost, so there is nothing to report.
+        """
+        source = _microstate(self.E, seed=self.DECIDES)
+        other = _microstate(self.Z, conformers=[])
+
+        report = repair_migrated_conformers(
+            ChargeState(charge=-1, microstates=[source, other]), stage="sampling"
+        )
+
+        assert report.unresolved_tie == 0
+        assert report.touched == 0
+        assert report.summary() is None
