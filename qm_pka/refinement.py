@@ -155,13 +155,8 @@ def refine(
         # before deduplicating, so a migrated conformer is compared against the
         # microstate it now belongs to rather than the one it started in.
         report = repair_migrated_conformers(cs, stage="refinement")
-        if report.touched:
-            log.info(
-                f"  q={cs.charge}: {report.moved} conformer(s) re-filed after a proton moved"
-                f"{f', {report.detached} with a detached H' if report.detached else ''}"
-                f"{f', {report.unmatched} matching no microstate' if report.unmatched else ''}"
-                f"{f', {report.ambiguous} ambiguous' if report.ambiguous else ''}"
-            )
+        if (summary := report.summary()) is not None:
+            log.info(f"  q={cs.charge}: {summary}")
 
         # Deduplicate before the Hessians, not after. Optimization routinely
         # relaxes distinct sampled conformers onto the same DFT minimum, and

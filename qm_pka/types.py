@@ -105,6 +105,7 @@ ExclusionReason = Literal[
     "scoring_failed",
     # The three below differ in kind from the four above: the energy computed
     # fine, and it is the *label* that is wrong.  See qm_pka.protomer_geometry.
+    "fragmented",  # the heavy-atom framework came apart; the energy is a complex's
     "proton_detached",  # a hydrogen left the molecule; the energy is a fragment's
     "no_matching_microstate",  # minimised to a species the enumerator never produced
     "ambiguous_microstate",  # several microstates match; they differ only in stereochemistry

@@ -94,6 +94,26 @@ def assign_hydrogens(geom: Geometry) -> tuple[int, ...]:
 # Heavy bonds separate far more cleanly than X-H contacts: a C-C bond is ~1.5 A
 # against a next-nearest approach of 2.4 A or more, so the cutoff has room that
 # the hydrogen assignment never had.
+#
+# Values are the Cordero single-bond set: B. Cordero et al., "Covalent radii
+# revisited", Dalton Trans., 2008, 2832-2838 (doi:10.1039/B801115J), fitted to
+# crystallographic bond distances. Every entry here is identical to RDKit's
+# `Chem.GetPeriodicTable().GetRcovalent(symbol)`, which carries the same table,
+# so this dict is a transcription rather than a separate choice -- kept inline
+# only to leave this module free of an RDKit import, since its whole point is
+# reading identity from coordinates without touching bond perception. If that
+# stops being worth it, calling RDKit directly would also retire
+# `_DEFAULT_RADIUS`, which unlike the table is an invented number.
+#
+# Single-bond radii, so additivity underestimates nothing and overestimates
+# multiple bonds: measured over 156837 bonded pairs in stored runs, the median
+# distance is 0.97-1.01 of the radius sum for every populated element pair, with
+# p95 at 1.02-1.03 and a low tail near 0.85 that is entirely C=O and aromatic
+# C-C. Every systematic deviation in this chemistry -- bond order, aromaticity,
+# polarity, amide delocalisation -- makes a real bond *shorter* than additive,
+# which is why a scale factor above 1 is safe. `_BOND_SCALE` is this project's
+# own choice, not Cordero's; the longest real bond seen against it is an N-O at
+# 1.238 of the radius sum.
 _COVALENT_RADIUS: dict[str, float] = {
     "H": 0.31,
     "B": 0.84,
@@ -144,6 +164,68 @@ def heavy_framework(geom: Geometry) -> tuple[tuple[int, ...], ...]:
                 neighbours[position[i]].append(position[j])
                 neighbours[position[j]].append(position[i])
     return tuple(tuple(sorted(n)) for n in neighbours)
+
+
+def heavy_components(geom: Geometry) -> tuple[tuple[int, ...], ...]:
+    """Connected components of the heavy-atom framework, in heavy-atom positions.
+
+    One component is an intact molecule. More than one means the framework came
+    apart -- a water leaving, a decarboxylation, a bond the optimizer broke --
+    and the energy belongs to a complex rather than to the species its label
+    names.
+
+    This is the check the hydrogen assignment cannot make. A *hydrogen* that
+    leaves is caught by its distance to the nearest heavy atom, but an oxygen
+    that leaves takes its hydrogens with it, so every H stays ~0.97 A from a
+    heavy atom and `ProtonAssignment.is_intact` sees nothing wrong. The identity
+    is blind to it in both approaches: approach 1 reads its framework from the
+    *template* and only the hydrogen counts from the coordinates, so a broken
+    C-O yields a byte-identical key; approach 2 computes the framework but does
+    not hash it, so a fragment and an intact structure share a fingerprint.
+
+    Uses the same distance criterion as `heavy_framework` -- ``_BOND_SCALE`` times
+    the sum of covalent radii, so 1.900 A for C-C, 1.775 A for C-O, 1.713 A for
+    N-O -- and introduces no new threshold. A single heavy atom is one component,
+    not a fragment.
+
+    That criterion is load-bearing here in a way it was not as an ordering guard,
+    so it was measured: over 630166 heavy-atom pairs in 22117 stored conformers,
+    the longest distance called a bond is 0.996 of its limit (C-O at 1.767 A) and
+    the shortest called a non-bond is 1.015 (C-C at 1.929 A). Only 48 pairs fall
+    within 10% of the cutoff either way. The margin is narrowest for C-O, where
+    1.767 A reads as bonded and 1.803 A does not -- 0.036 A apart.
+
+    A marginal pair only matters when it is a *bridge*; where another path
+    connects the two atoms, misjudging it changes nothing. None of the
+    near-cutoff C-O contacts above disconnected anything. Applied retroactively
+    to every stored run, 27 of those 22117 conformers come back fragmented, in
+    three molecules: a fluoride leaving (4.8-5.0 A from anything), a water
+    leaving a gem-diol (2.4-2.7 A), and one carboxyl separating at that 1.929 A
+    C-C. Twenty-six are unambiguous; one sits on the boundary.
+
+    The residual limitation is that this is distance alone, with no bond order: a
+    genuinely stretched bridging bond near the cutoff would read as fragmentation.
+    Wiberg bond orders would settle it, as they do for the rigidity question in
+    docs/protomer-identity.md, at the cost of an xtb call this path does not make.
+    """
+    framework = heavy_framework(geom)
+    seen: set[int] = set()
+    components: list[tuple[int, ...]] = []
+    for start in range(len(framework)):
+        if start in seen:
+            continue
+        stack = [start]
+        seen.add(start)
+        component = []
+        while stack:
+            node = stack.pop()
+            component.append(node)
+            for neighbour in framework[node]:
+                if neighbour not in seen:
+                    seen.add(neighbour)
+                    stack.append(neighbour)
+        components.append(tuple(sorted(component)))
+    return tuple(components)
 
 
 def geometric_identity(geom: Geometry) -> GeometricIdentity:

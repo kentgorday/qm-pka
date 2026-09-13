@@ -50,6 +50,7 @@ from qm_pka.tautomer_dedup import (
     ProtonAssignment,
     assign_protons,
     geometric_fingerprint,
+    heavy_components,
     heavy_frameworks_agree,
 )
 from qm_pka.types import (
@@ -70,6 +71,7 @@ __all__ = [
     "DETACHED_DISTANCE",
     "ProtonAssignment",
     "assign_protons",
+    "heavy_components",
     "match_to_candidate",
     "protonation_key_from_geometry",
     "protonation_key_from_mol",
@@ -250,6 +252,71 @@ def _mirror(mol: Chem.Mol) -> Chem.Mol:
     return rw.GetMol()
 
 
+def _reordered(geom: Geometry, order: list[int]) -> Geometry:
+    """``geom`` with its atoms permuted into ``order``."""
+    return Geometry(
+        symbols=tuple(geom.symbols[i] for i in order),
+        coords=geom.coords[order].copy(),
+    )
+
+
+def _order_for_correspondence(
+    geom: Geometry,
+    assignment: ProtonAssignment,
+    slots: list[int | None],
+    source_of_target: dict[int, int],
+) -> list[int] | None:
+    """The geometry's atom indices in a target's slot order, under one correspondence.
+
+    ``None`` when the geometry cannot fill the slots -- it does not have the
+    target's hydrogen distribution under this correspondence.
+    """
+    heavy = geom.heavy_atom_indices
+    pending: dict[int, list[int]] = defaultdict(list)
+    for h_idx, owner in zip(geom.hydrogen_indices, assignment.owner, strict=True):
+        pending[heavy.index(owner)].append(h_idx)
+
+    order: list[int] = []
+    next_heavy = 0
+    for slot in slots:
+        source_pos = source_of_target[next_heavy if slot is None else slot]
+        if slot is None:
+            order.append(heavy[source_pos])
+            next_heavy += 1
+        elif pending[source_pos]:
+            order.append(pending[source_pos].pop(0))
+        else:
+            return None
+    if len(order) != len(geom.symbols) or any(pending.values()):
+        return None
+    return order
+
+
+def _assert_identity_is_meaningful(geom: Geometry, target_template: Chem.Mol) -> None:
+    """Guard the frame-order assumption the identity correspondence rests on.
+
+    Preferring the identity leans on the geometry being in the template's atom
+    order harder than a search does: a search recovers the right layout from a
+    permuted geometry, whereas here a permutation that happened to preserve the
+    hydrogen distribution would be taken for the identity. Nothing in the
+    pipeline permutes atoms -- ``smiles_to_3d`` embeds in frame order and
+    neither xtb, CREST, Psi4 nor PySCF reorders them -- so this is an assumption
+    worth stating rather than a failure worth handling.
+
+    The element sequence is already implied: the identity appears among the
+    skeleton matches only if source atom *i* and target atom *i* share an
+    element. Checking it anyway costs nothing and keeps the invariant true if
+    the matcher's atom comparator is ever loosened.
+    """
+    heavy_syms = [a.GetSymbol() for a in target_template.GetAtoms() if a.GetAtomicNum() != 1]
+    geom_syms = [geom.symbols[i] for i in geom.heavy_atom_indices]
+    if heavy_syms != geom_syms:
+        raise ValueError(
+            f"identity correspondence assumed but template and geometry disagree on "
+            f"heavy-atom ordering: {''.join(heavy_syms)} vs {''.join(geom_syms)}"
+        )
+
+
 def _layouts_for_target(
     geom: Geometry,
     assignment: ProtonAssignment,
@@ -271,9 +338,40 @@ def _layouts_for_target(
     ignores them, which would map a protonated site onto an automorphic bare one
     -- the same trap that made a plain substructure match unusable for the
     ordering in the first place.
+
+    The identity correspondence, when it survives that filter, is returned
+    *alone*. The geometry carries the source template's atom order and nothing
+    downstream permutes atoms, so identity is the correspondence the atoms
+    actually have -- the automorphisms are relabellings with no physical content
+    for this conformer. Surviving the filter under the identity is exactly the
+    statement that the geometry's positionwise hydrogen vector equals the
+    target's, i.e. that no proton changed owner; a search is needed only when it
+    did, and that is where a genuine ambiguity can arise.
+
+    This is not the ``same_microstate`` shortcut that was removed. That one
+    keyed on the protonation key, which is invariant under automorphism and so
+    could not tell whether the hydrogens sat on the positions the template
+    actually uses; the positionwise vector can, and is what the filter compares.
     """
+    slots = _heavy_slots(target_template)
+    target_counts = _template_counts(target_template)
+
+    # Fast path, and the only one taken unless a proton changed owner: equal
+    # positionwise hydrogen vectors mean the two skeletons are the same graph,
+    # so the identity is an isomorphism -- and, per the docstring, the true one.
+    # Built directly rather than picked out of a search, both to skip the search
+    # and so that correctness does not depend on the identity surviving
+    # ``max_layouts``.
+    if assignment.counts == target_counts:
+        _assert_identity_is_meaningful(geom, target_template)
+        order = _order_for_correspondence(
+            geom, assignment, slots, {pos: pos for pos in range(len(target_counts))}
+        )
+        if order is not None:
+            return [_reordered(geom, order)]
+
     source_skeleton = _skeleton_mol(source_template, assignment.counts)
-    target_skeleton = _skeleton_mol(target_template, _template_counts(target_template))
+    target_skeleton = _skeleton_mol(target_template, target_counts)
     matches = target_skeleton.GetSubstructMatches(
         source_skeleton, uniquify=False, useChirality=False, maxMatches=max_layouts
     )
@@ -283,8 +381,6 @@ def _layouts_for_target(
             f"some atom orderings were not considered"
         )
 
-    slots = _heavy_slots(target_template)
-    heavy = geom.heavy_atom_indices
     layouts: list[Geometry] = []
     seen: set[tuple[int, ...]] = set()
     for match in matches:
@@ -294,37 +390,16 @@ def _layouts_for_target(
             for src, tgt in enumerate(match)
         ):
             continue
-        source_of_target = {tgt: src for src, tgt in enumerate(match)}
-
-        pending: dict[int, list[int]] = defaultdict(list)
-        for h_idx, owner in zip(geom.hydrogen_indices, assignment.owner, strict=True):
-            pending[heavy.index(owner)].append(h_idx)
-
-        order: list[int] = []
-        next_heavy = 0
-        ok = True
-        for slot in slots:
-            source_pos = source_of_target[next_heavy if slot is None else slot]
-            if slot is None:
-                order.append(heavy[source_pos])
-                next_heavy += 1
-            elif pending[source_pos]:
-                order.append(pending[source_pos].pop(0))
-            else:
-                ok = False
-                break
-        if not ok or len(order) != len(geom.symbols) or any(pending.values()):
+        order = _order_for_correspondence(
+            geom, assignment, slots, {tgt: src for src, tgt in enumerate(match)}
+        )
+        if order is None:
             continue
         key = tuple(order)
         if key in seen:
             continue
         seen.add(key)
-        layouts.append(
-            Geometry(
-                symbols=tuple(geom.symbols[i] for i in order),
-                coords=geom.coords[order].copy(),
-            )
-        )
+        layouts.append(_reordered(geom, order))
     return layouts
 
 
@@ -409,6 +484,7 @@ class MigrationReport:
 
     checked: int = 0
     moved: int = 0
+    fragmented: int = 0
     detached: int = 0
     unmatched: int = 0
     ambiguous: int = 0
@@ -420,7 +496,57 @@ class MigrationReport:
 
     @property
     def touched(self) -> int:
-        return self.moved + self.detached + self.unmatched + self.created
+        """Conformers this moved, opened a microstate for, or refused to place.
+
+        ``ambiguous`` belongs here: it excludes a conformer outright. Leaving it
+        out made an ambiguous-only charge state print no summary at all, even as
+        it discarded every conformer of a microstate -- which is what happened to
+        malonic acid at q=-1, where two exclusions were visible only as
+        per-conformer warnings.
+
+        The counters that *keep* a conformer -- ``unresolved_tie``,
+        ``stereo_unmatched`` -- are deliberately not here. Nothing was touched,
+        so the caller's "re-filed" line would be wrong; `summary` reports them
+        separately.
+        """
+        return (
+            self.moved
+            + self.fragmented
+            + self.detached
+            + self.unmatched
+            + self.ambiguous
+            + self.created
+        )
+
+    def summary(self) -> str | None:
+        """One line naming every outcome that occurred, or ``None`` if none did.
+
+        Built here rather than at each call site: the three callers had drifted
+        into formatting different subsets of the same report, so an outcome was
+        reported or not depending on which stage produced it.
+        """
+        parts: list[str] = []
+        if self.moved:
+            parts.append(f"{self.moved} conformer(s) re-filed after a proton moved")
+        if self.created:
+            parts.append(f"{self.created} new microstate(s) opened")
+        if self.fragmented:
+            parts.append(f"{self.fragmented} fragmented")
+        if self.detached:
+            parts.append(f"{self.detached} with a detached H")
+        if self.unmatched:
+            parts.append(f"{self.unmatched} matching no microstate")
+        if self.ambiguous:
+            parts.append(f"{self.ambiguous} excluded as ambiguous")
+        if self.unresolved_tie:
+            parts.append(f"{self.unresolved_tie} left in place, indistinguishable")
+        if self.stereo_unmatched:
+            parts.append(f"{self.stereo_unmatched} with an unmatched configuration")
+        if not parts:
+            return None
+        if self.tightest_margin < 0.2:
+            parts.append(f"tightest H-ownership margin {self.tightest_margin:.2f} A")
+        return "; ".join(parts)
 
 
 def _heavy_slots(template: Chem.Mol) -> list[int | None]:
@@ -588,12 +714,23 @@ def _exclude(
     )
 
 
+def _fragment_detail(components: tuple[tuple[int, ...], ...]) -> str:
+    sizes = ", ".join(str(len(c)) for c in components)
+    return f"heavy-atom framework in {len(components)} pieces (sizes {sizes})"
+
+
 def repair_migrated_conformers(cs: ChargeState, stage: ExclusionStage) -> MigrationReport:
     """Re-file conformers whose proton moved during minimisation.
 
     Each conformer's protonation state is read back off its geometry and
     compared against the microstate it is filed under.  Where they differ the
     conformer is moved to the microstate it actually became.
+
+    A conformer whose heavy-atom framework came apart is excluded first, in both
+    approaches. Neither identity can see it: approach 1 takes its framework from
+    the template and only the hydrogen counts from the coordinates, and approach
+    2 computes the framework but does not hash it, so in both a fragment reads
+    as the intact species.
 
     The two sampling approaches diverge on what to do when no existing
     microstate matches, because they disagree about where microstates come from.
@@ -647,6 +784,23 @@ def _repair_labelled(cs: ChargeState, stage: ExclusionStage) -> MigrationReport:
             report.checked += 1
             assignment = assign_protons(conf.geometry)
             report.tightest_margin = min(report.tightest_margin, assignment.min_margin)
+
+            # Connectivity first, because the protonation key cannot see it: the
+            # framework below comes from the *template*, and only the hydrogen
+            # counts from the coordinates, so a structure whose C-O broke yields
+            # a key identical to the intact species and is filed as though
+            # nothing happened. Five of the eight `no_matching_microstate`
+            # exclusions in the first end-to-end batch were fragmentations that
+            # only failed to match by luck.
+            components = heavy_components(conf.geometry)
+            if len(components) > 1:
+                report.fragmented += 1
+                log.warning(
+                    f"  q={cs.charge}: a conformer of {ms.tautomer_id[:32]} came apart during "
+                    f"minimisation ({_fragment_detail(components)}); excluding it"
+                )
+                _exclude(ms, conf, stage, "fragmented", _fragment_detail(components))
+                continue
 
             if not assignment.is_intact:
                 report.detached += 1
@@ -811,8 +965,36 @@ def _repair_unlabelled(cs: ChargeState, stage: ExclusionStage) -> MigrationRepor
     first built.  The fingerprint is positional, so it only compares across
     microstates that share a heavy-atom ordering; that is checked rather than
     assumed, and the whole charge state is skipped if it does not hold.
+
+    Structures that came apart are excluded in a pre-pass, before that check
+    runs, so a fragment cannot disable it for the conformers that are fine.
     """
     report = MigrationReport()
+
+    # Fragmented structures go first, before anything compares frameworks. The
+    # agreement check below is about heavy-atom *ordering* -- the fingerprint is
+    # positional, so it is meaningless across structures that order their heavy
+    # atoms differently -- and a structure that came apart fails it for an
+    # unrelated reason. Since the response to a disagreement is to skip the
+    # whole charge state, one fragment would otherwise disable the migration
+    # check for every conformer at that charge, including the intact ones; and
+    # because the reference is whichever conformer is reached first, a fragment
+    # arriving first would make the healthy majority look like the disagreement.
+    for ms in cs.microstates:
+        intact: list[Conformer] = []
+        for conf in ms.conformers:
+            components = heavy_components(conf.geometry)
+            if len(components) > 1:
+                report.checked += 1
+                report.fragmented += 1
+                log.warning(
+                    f"  q={cs.charge}: a conformer of tautomer {ms.tautomer_id[:8]} came apart "
+                    f"during minimisation ({_fragment_detail(components)}); excluding it"
+                )
+                _exclude(ms, conf, stage, "fragmented", _fragment_detail(components))
+                continue
+            intact.append(conf)
+        ms.conformers = intact
 
     reference: Geometry | None = None
     for ms in cs.microstates:

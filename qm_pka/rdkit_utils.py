@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import zlib
 
 import numpy as np
 from rdkit import Chem
@@ -43,7 +44,7 @@ def frame_atom_order(mol: Chem.Mol) -> list[int]:
     return sorted(range(mol.GetNumAtoms()), key=lambda i: ranks[i])
 
 
-def smiles_to_3d(smiles: str) -> tuple[Geometry, str]:
+def smiles_to_3d(smiles: str, seed: int | None = None) -> tuple[Geometry, str]:
     """Generate a 3D geometry from a SMILES string via ETKDG embedding.
 
     Returns (geometry, explicit_h_smiles) where the geometry's atom
@@ -60,13 +61,26 @@ def smiles_to_3d(smiles: str) -> tuple[Geometry, str]:
     problem first; see `qm_pka.protomer_geometry`. Hydrogens still interleave
     differently between protomers, since SMILES writes each one attached to its
     heavy atom, but that reordering is a regrouping rather than a mapping.
+
+    The embedding is seeded from the SMILES itself. ETKDGv3's default
+    ``randomSeed = -1`` draws from RDKit's *global* RNG, which starts from a
+    fixed state per process: a whole run reproduces, but the n-th embedding
+    depends on every embedding before it. One species' starting geometry then
+    depends on how many microstates the enumerator happened to emit ahead of it,
+    so rerunning a single molecule does not reproduce the geometry it had inside
+    a batch, and adding a microstate silently perturbs every later one. Seeding
+    per SMILES decouples them: a species embeds identically wherever it appears.
+    ``seed`` overrides that, for callers that need a specific conformer rather
+    than a reproducible one.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError(f"RDKit could not parse SMILES: {smiles}")
     mol = Chem.RenumberAtoms(mol, frame_atom_order(mol))
     mol = Chem.AddHs(mol)
-    status = AllChem.EmbedMolecule(mol, AllChem.ETKDGv3())
+    params = AllChem.ETKDGv3()
+    params.randomSeed = zlib.crc32(smiles.encode()) & 0x7FFFFFFF if seed is None else seed
+    status = AllChem.EmbedMolecule(mol, params)
     if status != 0:
         raise RuntimeError(f"ETKDG embedding failed for: {smiles}")
     AllChem.MMFFOptimizeMolecule(mol)
