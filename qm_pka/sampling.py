@@ -35,7 +35,12 @@ from qm_pka.rdkit_utils import (
     validate_input_smiles,
 )
 from qm_pka.stereo import enumerate_and_deduplicate
-from qm_pka.tautomer_dedup import deduplicate_tautomers, heavy_components
+from qm_pka.tautomer_dedup import (
+    DETACHED_DISTANCE,
+    assign_protons,
+    deduplicate_tautomers,
+    heavy_components,
+)
 from qm_pka.thermo import quasi_rrho_free_energy
 from qm_pka.types import (
     ChargeState,
@@ -48,6 +53,52 @@ from qm_pka.types import (
 from qm_pka.xtb_runner import frequencies, optimize, single_point
 
 log = logging.getLogger(__name__)
+
+
+def _dissociated(geom: Geometry) -> str | None:
+    """Why this geometry is not a bound molecule, or ``None`` if it is.
+
+    Checked before the conformer search, because CREST cannot survive a
+    dissociated input and takes a long time to say so. Its iMTD-GC calibrates
+    settings with a trial metadynamics, and a loose fragment makes the
+    trajectory diverge: CREST halves the time step four times, disables SHAKE,
+    then exits non-zero. A departed proton diverges immediately (~4 s), while a
+    fragment still weakly interacting at 2.7-4.9 A calibrates and runs the full
+    70 ps before failing downstream -- half an hour for a structure that was
+    never going to yield conformers.
+
+    The optimizer gives no warning: xtb converges happily onto a dissociated
+    structure and reports success. `repair_migrated_conformers` catches these
+    anyway, but it runs after the search, so the wasted time is already spent.
+
+    Both checks reuse the thresholds already in `qm_pka.tautomer_dedup` and
+    introduce none: connectivity from `heavy_components`, and the hydrogen's
+    distance to the nearest heavy atom from `assign_protons`.
+    """
+    components = heavy_components(geom)
+    if len(components) > 1:
+        sizes = " + ".join(str(len(c)) for c in sorted(components, key=len, reverse=True))
+        return f"the heavy framework came apart into {len(components)} pieces ({sizes} atoms)"
+    assignment = assign_protons(geom)
+    if not assignment.is_intact:
+        return (
+            f"hydrogen(s) {list(assignment.detached)} sit further than "
+            f"{DETACHED_DISTANCE} A from every heavy atom"
+        )
+    return None
+
+
+def _single_conformer(geom: Geometry, charge: int, solvent: str | None) -> list[Conformer]:
+    """One conformer from one geometry, with its energies, as a stand-in ensemble."""
+    total = single_point(geom, charge=charge, solvent=solvent)
+    gas_phase = single_point(geom, charge=charge, solvent=None)
+    return [
+        Conformer(
+            geometry=geom,
+            electronic_energy=gas_phase,
+            solvation_energy=total - gas_phase if solvent is not None else None,
+        )
+    ]
 
 
 def _filter_by_energy_window(conformers: list[Conformer], ewin_kcal: float) -> list[Conformer]:
@@ -290,30 +341,33 @@ def run_approach1(
             try:
                 geom_3d, explicit_h_smi = smiles_to_3d(smi)
                 geom_opt, _ = optimize(geom_3d, charge=q, solvent=solvent)
-                try:
-                    conformers = conformer_search(
-                        geom_opt,
-                        charge=q,
-                        solvent=solvent,
-                        ewin=ewin,
-                        mode=crest_mode,
-                        threads=threads,
-                    )
-                    log.info(f"    Found {len(conformers)} conformer(s)")
-                except RuntimeError:
+                if (reason := _dissociated(geom_opt)) is not None:
+                    # Not bound, so there is no conformational ensemble to find.
+                    # Kept as one conformer rather than dropped here: the repair
+                    # pass runs next, before the Hessians, and excludes it with
+                    # the reason recorded against its microstate.
                     log.warning(
-                        f"    Conformer search failed for {smi}, "
-                        f"falling back to single optimized geometry"
+                        f"    {smi} is not bound after minimisation -- {reason}; "
+                        f"skipping the conformer search"
                     )
-                    total = single_point(geom_opt, charge=q, solvent=solvent)
-                    gas_phase = single_point(geom_opt, charge=q, solvent=None)
-                    conformers = [
-                        Conformer(
-                            geometry=geom_opt,
-                            electronic_energy=gas_phase,
-                            solvation_energy=total - gas_phase if solvent is not None else None,
+                    conformers = _single_conformer(geom_opt, q, solvent)
+                else:
+                    try:
+                        conformers = conformer_search(
+                            geom_opt,
+                            charge=q,
+                            solvent=solvent,
+                            ewin=ewin,
+                            mode=crest_mode,
+                            threads=threads,
                         )
-                    ]
+                        log.info(f"    Found {len(conformers)} conformer(s)")
+                    except RuntimeError as e:
+                        log.warning(
+                            f"    Conformer search failed for {smi}, falling back to "
+                            f"single optimized geometry: {e}"
+                        )
+                        conformers = _single_conformer(geom_opt, q, solvent)
                 microstates.append(
                     Microstate(
                         tautomer_id=smi,
@@ -478,10 +532,10 @@ def _run_crest_pipeline_for_stereoisomer(
         # search is run on. There is no microstate to record it against yet --
         # these are bare geometries from the charge walk -- so it is logged and
         # dropped, as CREST's own failures are here.
-        intact = [geom for geom in all_tautomers if len(heavy_components(geom)) == 1]
+        intact = [geom for geom in all_tautomers if _dissociated(geom) is None]
         if len(intact) < len(all_tautomers):
             log.warning(
-                f"    dropped {len(all_tautomers) - len(intact)} fragmented structure(s) "
+                f"    dropped {len(all_tautomers) - len(intact)} dissociated structure(s) "
                 f"at charge {q}"
             )
 
@@ -507,21 +561,13 @@ def _run_crest_pipeline_for_stereoisomer(
                         threads=threads,
                     )
                     log.info(f"      Found {len(conformers)} conformer(s)")
-                except RuntimeError:
+                except RuntimeError as e:
                     log.warning(
-                        f"      Conformer search failed for tautomer {fp[:8]}, "
-                        f"falling back to single optimized geometry"
+                        f"      Conformer search failed for tautomer {fp[:8]}, falling back "
+                        f"to single optimized geometry: {e}"
                     )
                     geom_opt, _ = optimize(representative, charge=q, solvent=solvent)
-                    total = single_point(geom_opt, charge=q, solvent=solvent)
-                    gas_phase = single_point(geom_opt, charge=q, solvent=None)
-                    conformers = [
-                        Conformer(
-                            geometry=geom_opt,
-                            electronic_energy=gas_phase,
-                            solvation_energy=total - gas_phase if solvent is not None else None,
-                        )
-                    ]
+                    conformers = _single_conformer(geom_opt, q, solvent)
                 microstates.append(
                     Microstate(
                         tautomer_id=fp,
