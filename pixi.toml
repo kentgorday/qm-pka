@@ -58,10 +58,25 @@ pyscf-dispersion = ">=1.3"
 # Basis set exchange: provides vDZP basis set for wB97X-3c (not in PySCF's
 # built-in basis library).
 basis_set_exchange = ">=0.12,<0.13"
-# geomeTRIC: geometry optimizer used by PySCF for DFT refinement stage.
+# geomeTRIC: geometry optimizer used by PySCF and OrbMol for the refinement stage.
 geometric = ">=1.0"
+# OrbMol-v2 (orb-models, PyPI only): machine-learned refinement driver.  torch,
+# dm-tree and ase come from conda-forge.  orb-models pins dm-tree==0.1.8, which
+# has no PyPI wheel for CPython 3.13 and whose conda-forge builds need libabseil
+# 2024 (conflicts with current pytorch); it only uses tree.map_structure/flatten,
+# unchanged since, so the pin is overridden below.  conda-forge pytorch >=2.10 is
+# built against pybind11-abi 11 while PySCF's xcfun needs abi 4, so the solver
+# holds torch at 2.8/2.9.  On linux-64 the only torch that coexists with Psi4 is
+# the cpu_mkl build, which switches libblas to MKL.
+pytorch = ">=2.8"
+dm-tree = ">=0.1.8"
+ase = ">=3.25,<4"
 
 [pypi-dependencies]
 qm-pka = { path = ".", editable = true }
 ruff = ">=0.11,<1"
+orb-models = ">=0.7.0,<0.8"
+
+[pypi-options.dependency-overrides]
+dm-tree = ">=0.1.8"
 
