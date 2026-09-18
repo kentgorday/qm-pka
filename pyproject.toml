@@ -13,7 +13,17 @@ warn_return_any = true
 warn_unused_configs = true
 
 [[tool.mypy.overrides]]
-module = ["rdkit.*", "pyscf.*", "pyscf", "basis_set_exchange", "dftd4.*"]
+module = [
+    "rdkit.*",
+    "pyscf.*",
+    "pyscf",
+    "basis_set_exchange",
+    "dftd4.*",
+    "orb_models.*",
+    "cached_path",
+    "geometric",
+    "geometric.*",
+]
 ignore_missing_imports = true
 
 [tool.ruff]
@@ -24,4 +34,4 @@ line-length = 99
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
 
 [tool.pytest.ini_options]
-markers = ["slow: marks tests that call external programs (xtb, crest)"]
+markers = ["slow: marks tests that call external programs (xtb, crest) or load the OrbMol model"]

@@ -67,8 +67,9 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
 
     Stage 1 (Sampling): CREST-based conformer/tautomer/protonation enumeration,
         with an xTB-level RRHO correction folded into the energy filter.
-    Stage 2 (Refinement): DFT geometry optimization + RRHO recompute on the DFT
-        geometry (xtb --bhess or refinement-level DFT, per rrho_method).
+    Stage 2 (Refinement): geometry optimization with the refinement driver (DFT,
+        or the OrbMol-v2 potential) + RRHO recompute on that geometry (xtb
+        --bhess or the refinement driver's Hessian, per rrho_method).
     Stage 3 (Scoring): DFT single-point energy (RRHO carried over unchanged).
 
     With resume=True, any stage whose ensemble.json is already on disk is
@@ -141,7 +142,7 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
         ref = config.refinement
         refine(
             ensemble,
-            driver_name=config.compute.driver,
+            driver_name=ref.driver,
             method=ref.method,
             basis=ref.basis,
             solvent_model=ref.solvent_model,

@@ -1,7 +1,8 @@
-"""Refinement stage: DFT geometry optimization for sampled conformers.
+"""Refinement stage: geometry optimization for sampled conformers.
 
-Replaces xTB-level energies with DFT energies and optionally computes
-quasi-RRHO vibrational free energy corrections.
+Replaces xTB-level energies with refinement-level ones -- DFT (psi4/pyscf) or
+the OrbMol-v2 machine-learned potential -- and recomputes the quasi-RRHO
+vibrational free energy correction.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ log = logging.getLogger(__name__)
 
 
 def _get_driver(name: str) -> ModuleType:
-    """Return the DFT driver module for the given name."""
+    """Return the refinement driver module for the given name."""
     if name == "psi4":
         from qm_pka import psi4_runner
 
@@ -29,7 +30,11 @@ def _get_driver(name: str) -> ModuleType:
         from qm_pka import pyscf_runner
 
         return pyscf_runner
-    raise ValueError(f"Unknown driver: {name!r}. Must be 'psi4' or 'pyscf'.")
+    if name == "orbmol":
+        from qm_pka import orbmol_runner
+
+        return orbmol_runner
+    raise ValueError(f"Unknown driver: {name!r}. Must be 'psi4', 'pyscf' or 'orbmol'.")
 
 
 def refine(
@@ -46,17 +51,19 @@ def refine(
     threads: int = 1,
     memory_gb: float = DEFAULT_MEMORY_GB,
 ) -> Ensemble:
-    """Refine all conformers via DFT geometry optimization.
+    """Refine all conformers by geometry optimization at the refinement level.
 
     For each conformer in each charge state:
-      1. Run DFT geometry optimization (with solvent if configured).
+      1. Run the geometry optimization (with solvent if configured; the orbmol
+         driver is always gas phase).
       2. If solvent is used, run a gas-phase single-point on the optimized
          geometry to decompose into electronic and solvation components.
       3. Recompute the quasi-RRHO vibrational free-energy correction on the
          DFT geometry. ``rrho_method="xtb"`` uses a GFN2 single-point (biased)
          Hessian via ``xtb --bhess`` in implicit solvent (``xtb_rrho_solvent``);
-         ``rrho_method="dft"`` computes the Hessian at the refinement DFT level,
-         matching the refinement solvent. This replaces the cheap xTB RRHO that
+         ``rrho_method="dft"`` computes the Hessian with the refinement driver
+         at the refinement level (for orbmol, the OrbMol-v2 Hessian), matching
+         the refinement solvent. This replaces the cheap xTB RRHO that
          sampling computed on the xTB geometry.
 
     Runs in two passes per charge state: every conformer is optimized first,

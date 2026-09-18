@@ -1,0 +1,36 @@
+# pKa prediction for glycine: OrbMol-v2 refinement, PySCF scoring
+#
+# Three-stage workflow:
+#   1. Sampling   — CREST conformer/tautomer/protonation enumeration (GFN2-xTB)
+#   2. Refinement — geometry optimization with the OrbMol-v2 machine-learned
+#                   potential (gas phase; wB97M-V/def2-TZVPD-quality) + xTB RRHO
+#   3. Scoring    — single-point energy (wB97M-V/def2-QZVPPD + SS(V)PE)
+#
+# OrbMol-v2 has no implicit solvent, so it can only refine: [compute] driver
+# runs scoring and must stay psi4 or pyscf.  Refinement being gas-phase has the
+# same caveat as Psi4's default gas-phase refinement: a zwitterion can collapse
+# to its neutral tautomer during optimization.
+
+[molecule]
+smiles = "NCC(=O)O"
+charge_min = -1
+charge_max = 1
+
+[sampling]
+approach = "rdkit_first"
+ewin = 6.0
+
+[refinement]
+driver = "orbmol"  # method defaults to "OrbMol-v2"; no basis or solvent
+ewin = 10.0
+rrho_method = "xtb"  # or "dft" for the OrbMol-v2 Hessian
+
+[scoring]
+# PySCF defaults: wB97M-V / def2-QZVPPD / SS(V)PE
+solvent = "water"
+ewin = 10.0
+
+[compute]
+driver = "pyscf"
+threads = 8
+output_dir = "glycine_orbmol_output"

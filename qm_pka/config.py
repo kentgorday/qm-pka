@@ -3,9 +3,13 @@
 Reads a single TOML file that configures:
   [molecule]   — input SMILES and charge range
   [sampling]   — CREST-based conformer/tautomer/protonation sampling
-  [refinement] — geometry optimization with cheap DFT + quasi-RRHO correction
+  [refinement] — geometry optimization with cheap DFT (or OrbMol-v2) + quasi-RRHO
   [scoring]    — single-point energy with expensive DFT
   [compute]    — driver (psi4/pyscf), threads, output directory
+
+The [compute] driver runs both QM stages unless [refinement] names its own
+driver.  "orbmol" (the OrbMol-v2 machine-learned potential) is refinement-only:
+it is a gas-phase model with no implicit solvent, so it cannot score.
 """
 
 from __future__ import annotations
@@ -28,6 +32,11 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Driver-specific defaults
 # ---------------------------------------------------------------------------
+# Drivers each QM stage accepts.  Scoring needs implicit solvent, which OrbMol-v2
+# (trained on gas-phase wB97M-V/def2-TZVPD data) cannot provide.
+_REFINEMENT_DRIVERS = ("psi4", "pyscf", "orbmol")
+_SCORING_DRIVERS = ("psi4", "pyscf")
+
 _REFINEMENT_DEFAULTS: dict[str, dict[str, str | None]] = {
     "psi4": {
         "method": "wB97X-3c",
@@ -38,6 +47,12 @@ _REFINEMENT_DEFAULTS: dict[str, dict[str, str | None]] = {
         "method": "wB97X-3c",
         "basis": "vDZP",
         "solvent_model": "SSVPE",
+    },
+    # The model is the level of theory: no basis, and always gas phase.
+    "orbmol": {
+        "method": "OrbMol-v2",
+        "basis": "",
+        "solvent_model": None,
     },
 }
 
@@ -85,15 +100,17 @@ class SamplingConfig:
 
 @dataclass
 class RefinementConfig:
+    driver: str = ""  # "psi4", "pyscf" or "orbmol"; defaults to [compute] driver
     method: str = ""
     basis: str = ""
     solvent_model: str | None = None
     solvent: str | None = None  # e.g. "water" — required if solvent_model is set
     ewin: float = 10.0  # energy window (kcal/mol) for filtering after refinement
     pcm_hydrogen_radius: float = 1.1  # PCM cavity radius (Angstrom) for hydrogen
-    # quasi-RRHO recompute on the DFT geometry: "xtb" (GFN2 single-point/biased
-    # Hessian via xtb --bhess, always implicit solvent) or "dft" (Hessian at the
-    # refinement DFT level, matching the refinement solvent choice).
+    # quasi-RRHO recompute on the refined geometry: "xtb" (GFN2 single-point/biased
+    # Hessian via xtb --bhess, always implicit solvent) or "dft" (Hessian from the
+    # refinement driver at the refinement level, matching the refinement solvent
+    # choice; for "orbmol" that is the OrbMol-v2 Hessian despite the name).
     rrho_method: str = "xtb"
 
 
@@ -109,7 +126,7 @@ class ScoringConfig:
 
 @dataclass
 class ComputeConfig:
-    driver: str = "pyscf"  # "psi4" or "pyscf"
+    driver: str = "pyscf"  # "psi4" or "pyscf": scoring, and refinement unless overridden
     threads: int | None = None
     memory_gb: float = DEFAULT_MEMORY_GB
     output_dir: str = "output"
@@ -157,7 +174,14 @@ def load_config(path: Path) -> PkaConfig:
     )
     if compute.memory_gb <= 0:
         raise ValueError(f"[compute] memory_gb must be positive, got {compute.memory_gb}")
-    if compute.driver not in ("psi4", "pyscf"):
+    if compute.driver == "orbmol":
+        raise ValueError(
+            "[compute] driver = 'orbmol' is not supported: [compute] driver also runs "
+            "scoring, which needs implicit solvent, and OrbMol-v2 is gas-phase only. "
+            "Use it for refinement with [refinement] driver = 'orbmol', and keep "
+            "[compute] driver = 'psi4' or 'pyscf' for scoring."
+        )
+    if compute.driver not in _SCORING_DRIVERS:
         raise ValueError(f"Unknown driver: {compute.driver!r} (must be 'psi4' or 'pyscf')")
 
     # [sampling] — optional
@@ -182,13 +206,20 @@ def load_config(path: Path) -> PkaConfig:
     # Default solvent_model only applies when the user specifies a solvent;
     # otherwise it stays None (gas phase).
     ref_raw = raw.get("refinement", {})
-    ref_defaults = _REFINEMENT_DEFAULTS[compute.driver]
+    ref_driver = ref_raw.get("driver", compute.driver)
+    if ref_driver not in _REFINEMENT_DRIVERS:
+        raise ValueError(
+            f"Unknown [refinement] driver: {ref_driver!r} "
+            f"(must be one of {', '.join(repr(d) for d in _REFINEMENT_DRIVERS)})"
+        )
+    ref_defaults = _REFINEMENT_DEFAULTS[ref_driver]
     ref_solvent = ref_raw.get("solvent")
     ref_solvent_model: str | None = ref_raw.get(
         "solvent_model",
         ref_defaults.get("solvent_model") if ref_solvent is not None else None,
     )
     refinement = RefinementConfig(
+        driver=ref_driver,
         method=ref_raw.get("method", ref_defaults["method"]),
         basis=ref_raw.get("basis", ref_defaults["basis"]),
         solvent_model=ref_solvent_model,
@@ -231,8 +262,11 @@ def load_config(path: Path) -> PkaConfig:
             f"but no solvent (e.g. solvent = 'water')"
         )
 
+    if refinement.driver == "orbmol":
+        _validate_orbmol_refinement(refinement)
+
     # Warning: psi4 + solvent in refinement is very slow
-    if compute.driver == "psi4" and refinement.solvent_model is not None:
+    if refinement.driver == "psi4" and refinement.solvent_model is not None:
         log.warning(
             "Psi4 has no analytical gradients for PCM solvent models. "
             "Geometry optimization with implicit solvent will be extremely slow. "
@@ -244,7 +278,7 @@ def load_config(path: Path) -> PkaConfig:
     # "xtb" (ALPB Hessian) or drop the refinement solvent.
     if (
         refinement.rrho_method == "dft"
-        and compute.driver == "psi4"
+        and refinement.driver == "psi4"
         and refinement.solvent_model is not None
     ):
         raise ValueError(
@@ -261,3 +295,34 @@ def load_config(path: Path) -> PkaConfig:
         scoring=scoring,
         compute=compute,
     )
+
+
+def _validate_orbmol_refinement(refinement: RefinementConfig) -> None:
+    """Reject [refinement] settings OrbMol-v2 cannot honour.
+
+    The model is a gas-phase potential with no basis set, so an implicit-solvent
+    model or a basis would otherwise be silently dropped.
+    """
+    from qm_pka.orbmol_runner import MODELS
+
+    if refinement.method.lower() not in MODELS:
+        raise ValueError(
+            f"[refinement] method {refinement.method!r} is not an OrbMol model "
+            f"(known: {', '.join(MODELS)})"
+        )
+    if refinement.basis:
+        raise ValueError(
+            f"[refinement] basis = {refinement.basis!r} has no meaning for the orbmol "
+            "driver (the model is the level of theory); remove it."
+        )
+    if refinement.solvent_model is not None:
+        raise ValueError(
+            f"[refinement] solvent_model = {refinement.solvent_model!r} is not supported "
+            "by the orbmol driver: OrbMol-v2 is a gas-phase potential. Remove "
+            "solvent_model; solvation enters at scoring."
+        )
+    if refinement.solvent is not None:
+        log.warning(
+            f"[refinement] solvent = {refinement.solvent!r} is ignored by the orbmol "
+            "driver: OrbMol-v2 refinement is gas-phase."
+        )

@@ -42,19 +42,31 @@ from qm_pka.pipeline import run_pipeline
 from qm_pka.training_set import compound_dir_name, find_compound_dir
 
 
-def make_toml(smi: str, output_dir: Path, driver: str, threads: int, memory_gb: float) -> str:
+def make_toml(
+    smi: str,
+    output_dir: Path,
+    driver: str,
+    threads: int,
+    memory_gb: float,
+    refinement_driver: str | None = None,
+) -> str:
     """Build a TOML config string for one molecule.
 
     Charge range is hardcoded to [-2, +2]. Empty charge states (e.g. when
     the molecule cannot reach -2) flow through harmlessly.
 
-    Refinement-stage solvent is only emitted for PySCF, which has analytical
-    PCM gradients. Psi4 stays gas-phase at refinement (implicit solvent there
-    would fall back to finite-difference gradients and be impractically slow).
+    ``driver`` scores, and refines unless ``refinement_driver`` names another
+    ("orbmol" can only refine). Refinement-stage solvent is only emitted for
+    PySCF, which has analytical PCM gradients. Psi4 stays gas-phase at
+    refinement (implicit solvent there would fall back to finite-difference
+    gradients and be impractically slow), and OrbMol-v2 has no implicit solvent.
     Scoring is a single point, so implicit solvent is fine on either backend.
     """
     safe_smi = smi.replace('"', '\\"')
-    refinement_solvent = 'solvent = "water"\n' if driver == "pyscf" else ""
+    ref_driver = refinement_driver or driver
+    refinement_solvent = 'solvent = "water"\n' if ref_driver == "pyscf" else ""
+    if ref_driver != driver:
+        refinement_solvent = f'driver = "{ref_driver}"\n' + refinement_solvent
     return f'''\
 [molecule]
 smiles = "{safe_smi}"
@@ -98,6 +110,12 @@ def main() -> None:
         default=Path("training_set_output"),
     )
     parser.add_argument("--driver", default="pyscf", choices=["pyscf", "psi4"])
+    parser.add_argument(
+        "--refinement-driver",
+        choices=["pyscf", "psi4", "orbmol"],
+        default=None,
+        help="Driver for refinement only (default: --driver, which always scores)",
+    )
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument(
         "--memory",
@@ -180,7 +198,14 @@ def main() -> None:
         log.info(f"[{i}/{len(rows)}] {uid} ({smi}): starting")
         try:
             compound_dir.mkdir(parents=True, exist_ok=True)
-            toml_text = make_toml(smi, compound_dir, args.driver, args.threads, args.memory)
+            toml_text = make_toml(
+                smi,
+                compound_dir,
+                args.driver,
+                args.threads,
+                args.memory,
+                refinement_driver=args.refinement_driver,
+            )
             toml_path = compound_dir / "config.toml"
             toml_path.write_text(toml_text)
 

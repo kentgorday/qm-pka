@@ -214,6 +214,144 @@ class TestSolventValidation:
         assert "no analytical gradients" in caplog.text
 
 
+class TestRefinementDriver:
+    def test_defaults_to_compute_driver(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [compute]
+            driver = "psi4"
+        """)
+        )
+        assert cfg.refinement.driver == "psi4"
+
+    def test_orbmol_refinement_with_dft_scoring(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            driver = "orbmol"
+            [scoring]
+            solvent = "water"
+            [compute]
+            driver = "pyscf"
+        """)
+        )
+        assert cfg.refinement.driver == "orbmol"
+        assert (cfg.refinement.method, cfg.refinement.basis) == ("OrbMol-v2", "")
+        assert cfg.refinement.solvent_model is None
+        # Scoring keeps the [compute] driver's defaults.
+        assert cfg.compute.driver == "pyscf"
+        assert (cfg.scoring.method, cfg.scoring.solvent_model) == ("wB97M-V", "SSVPE")
+
+    def test_psi4_refinement_under_pyscf_scoring(self, tmp_toml: Callable[[str], Path]) -> None:
+        # Defaults and validation follow the refinement driver, not [compute].
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            driver = "psi4"
+            solvent = "water"
+            [compute]
+            driver = "pyscf"
+        """)
+        )
+        assert cfg.refinement.solvent_model is None  # psi4 refines gas-phase by default
+
+    def test_orbmol_cannot_score(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match=r"\[refinement\] driver = 'orbmol'"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [compute]
+                driver = "orbmol"
+            """)
+            )
+
+    def test_unknown_refinement_driver_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match=r"Unknown \[refinement\] driver"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                driver = "gaussian"
+            """)
+            )
+
+    def test_orbmol_solvent_model_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="gas-phase potential"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                driver = "orbmol"
+                solvent_model = "SSVPE"
+                solvent = "water"
+            """)
+            )
+
+    def test_orbmol_solvent_alone_warns(
+        self,
+        tmp_toml: Callable[[str], Path],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            cfg = load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                driver = "orbmol"
+                solvent = "water"
+            """)
+            )
+        assert cfg.refinement.solvent_model is None
+        assert "ignored by the orbmol driver" in caplog.text
+
+    def test_orbmol_basis_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="no meaning for the orbmol driver"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                driver = "orbmol"
+                basis = "def2-SVP"
+            """)
+            )
+
+    def test_orbmol_unknown_model_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="not an OrbMol model"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                driver = "orbmol"
+                method = "wB97X-3c"
+            """)
+            )
+
+    def test_orbmol_dft_rrho_accepted(self, tmp_toml: Callable[[str], Path]) -> None:
+        # "dft" means the refinement driver's own Hessian -- here OrbMol-v2's.
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            driver = "orbmol"
+            rrho_method = "dft"
+        """)
+        )
+        assert cfg.refinement.rrho_method == "dft"
+
+
 class TestSamplingConfig:
     def test_defaults(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
@@ -310,3 +448,11 @@ class TestExampleConfigs:
         assert cfg.molecule.smiles == "NCC(=O)O"
         assert cfg.compute.driver == "psi4"
         assert cfg.refinement.solvent_model is None
+
+    def test_glycine_orbmol(self) -> None:
+        cfg = load_config(Path("examples/glycine_orbmol.toml"))
+        assert cfg.molecule.smiles == "NCC(=O)O"
+        assert cfg.refinement.driver == "orbmol"
+        assert cfg.refinement.solvent_model is None
+        assert cfg.compute.driver == "pyscf"
+        assert cfg.scoring.solvent_model == "SSVPE"

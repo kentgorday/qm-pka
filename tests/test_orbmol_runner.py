@@ -1,0 +1,106 @@
+"""Tests for the OrbMol-v2 refinement driver."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from qm_pka import orbmol_runner
+from qm_pka.refinement import _get_driver, refine
+from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
+
+HARTREE_TO_KCAL = 627.509474
+METHOD = "OrbMol-v2"
+
+WATER = Geometry(
+    symbols=("O", "H", "H"),
+    coords=np.array([[0.0, 0.0, 0.0], [0.0, 0.757, 0.586], [0.0, -0.757, 0.586]]),
+)
+HYDROXIDE = Geometry(symbols=("O", "H"), coords=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.970]]))
+
+# wB97M-V/def2-TZVPD, the model's training level: PySCF 2.13.1, (99, 590) grid,
+# (50, 194) VV10 grid, conv_tol 1e-11, at the geometries above.  Frequencies are
+# at the wB97M-V/def2-TZVPD minimum of water.
+REF_E_WATER = -76.433427268778
+REF_E_HYDROXIDE = -75.80608220987526
+REF_WATER_FREQS = (1622.67, 3823.08, 3923.39)
+
+
+class TestWithoutModel:
+    def test_registered_as_refinement_driver(self) -> None:
+        assert _get_driver("orbmol") is orbmol_runner
+
+    def test_unknown_model_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown OrbMol model"):
+            orbmol_runner.single_point(WATER, 0, "wB97X-3c")
+
+    @pytest.mark.parametrize("fn", ["single_point", "optimize", "frequencies"])
+    def test_solvent_model_refused(self, fn: str) -> None:
+        with pytest.raises(ValueError, match="gas-phase potential"):
+            getattr(orbmol_runner, fn)(WATER, 0, METHOD, solvent_model="SSVPE", solvent="water")
+
+    def test_checksum_mismatch_raises(self, tmp_path: Path) -> None:
+        bogus = tmp_path / "weights.ckpt"
+        bogus.write_bytes(b"not the model")
+        with pytest.raises(RuntimeError, match="sha256"):
+            orbmol_runner._verified_weights(str(bogus), orbmol_runner.MODELS["orbmol-v2"].sha256)
+
+
+@pytest.mark.slow  # loads a 100 MB model (downloaded on first use)
+class TestAgainstTrainingLevel:
+    def test_energies(self) -> None:
+        e_water = orbmol_runner.single_point(WATER, 0, METHOD)
+        e_oh = orbmol_runner.single_point(HYDROXIDE, -1, METHOD)
+        assert abs(e_water - REF_E_WATER) * HARTREE_TO_KCAL < 0.5
+        assert abs(e_oh - REF_E_HYDROXIDE) * HARTREE_TO_KCAL < 0.5
+        # The charge input matters: deprotonation energy, ~394 kcal/mol here.
+        ref = (REF_E_HYDROXIDE - REF_E_WATER) * HARTREE_TO_KCAL
+        assert (e_oh - e_water) * HARTREE_TO_KCAL == pytest.approx(ref, abs=0.5)
+
+    def test_gradient_is_derivative_of_energy(self) -> None:
+        _, grad = orbmol_runner._energy_gradient(WATER, 0, METHOD)
+        h = 1e-4  # Angstrom
+        for atom, axis in [(0, 2), (1, 1), (2, 2)]:
+            dx = np.zeros_like(WATER.coords)
+            dx[atom, axis] = h
+            ep = orbmol_runner.single_point(Geometry(WATER.symbols, WATER.coords + dx), 0, METHOD)
+            em = orbmol_runner.single_point(Geometry(WATER.symbols, WATER.coords - dx), 0, METHOD)
+            fd = (ep - em) / (2 * h / orbmol_runner.BOHR_TO_ANG)
+            assert grad[atom, axis] == pytest.approx(fd, abs=1e-6)
+
+    def test_optimize_returns_energy_of_returned_geometry(self) -> None:
+        # The pyscf driver once returned the input geometry's energy; guard the
+        # same contract here.
+        opt, energy, converged = orbmol_runner.optimize(WATER, 0, METHOD)
+        assert converged
+        assert energy == pytest.approx(orbmol_runner.single_point(opt, 0, METHOD), abs=1e-10)
+        assert energy < orbmol_runner.single_point(WATER, 0, METHOD)
+
+    def test_frequencies(self) -> None:
+        opt, _, _ = orbmol_runner.optimize(WATER, 0, METHOD)
+        freqs = orbmol_runner.frequencies(opt, 0, METHOD)
+        assert len(freqs) == 3  # 3N - 6
+        np.testing.assert_allclose(sorted(freqs), REF_WATER_FREQS, atol=10.0)
+
+
+@pytest.mark.slow
+def test_refine_with_orbmol_driver() -> None:
+    """refine() runs end to end on the orbmol driver, Hessian RRHO included."""
+    start = Geometry(
+        WATER.symbols, WATER.coords + np.array([[0.0, 0.0, 0.05], [0.0, 0.0, 0], [0, 0, 0]])
+    )
+    ms = Microstate(tautomer_id="water", conformers=[Conformer(geometry=start)], smiles="O")
+    ensemble = Ensemble(input_smiles="O")
+    ensemble.charge_states[0] = ChargeState(charge=0, microstates=[ms])
+
+    refine(ensemble, driver_name="orbmol", method=METHOD, basis="", rrho_method="dft")
+
+    (conf,) = ensemble.charge_states[0].microstates[0].conformers
+    assert conf.refinement_converged
+    assert conf.solvation_energy is None  # gas phase
+    assert conf.electronic_energy == pytest.approx(
+        orbmol_runner.single_point(conf.geometry, 0, METHOD), abs=1e-10
+    )
+    assert conf.rrho_correction is not None and conf.rrho_correction > 0

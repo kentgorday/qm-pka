@@ -2,7 +2,8 @@
 
 Three-stage QM workflow for predicting macroscopic aqueous pKa values of small
 organic molecules from a SMILES string. Built on RDKit + CREST/xTB +
-PySCF/Psi4. Python 3.13, managed with pixi.
+PySCF/Psi4 (plus the OrbMol-v2 machine-learned potential as an optional
+refinement driver). Python 3.13, managed with pixi.
 
 The pipeline produces a fully-decomposed conformer **ensemble** (geometries +
 energy components + Boltzmann weights) for every charge state in a requested
@@ -18,7 +19,7 @@ each charge state.
 | Stage | What it does | Tool | Sets |
 |---|---|---|---|
 | 1. Sampling | Enumerate tautomers, protonation states, stereoisomers, conformers | CREST + GFN2-xTB (ALPB water) | `electronic_energy`, `solvation_energy`, `rrho_correction` (xTB `--hess`), `multiplicity` |
-| 2. Refinement | DFT geometry optimization + RRHO recompute on the DFT geometry | PySCF or Psi4 (+ xtb) | overwrites electronic/solvation with DFT values; recomputes `rrho_correction` and `multiplicity` |
+| 2. Refinement | Geometry optimization + RRHO recompute on the refined geometry | PySCF, Psi4 or OrbMol-v2 (+ xtb) | overwrites electronic/solvation with refinement-level values; recomputes `rrho_correction` and `multiplicity` |
 | 3. Scoring | High-level DFT single point | PySCF or Psi4 | overwrites electronic/solvation; leaves `rrho_correction` and `multiplicity` |
 
 After scoring, `assign_weights` populates per-conformer Boltzmann weights and
@@ -33,9 +34,10 @@ energy. It is then recomputed once on the refined DFT geometry, controlled by
 - `"xtb"` (default): GFN2 single-point biased Hessian (`xtb --bhess`, ALPB
   water) — the Spicher–Grimme SPH scheme. Cheap and robust on the non-stationary
   DFT geometry; recommended.
-- `"dft"`: Hessian at the refinement DFT level, matching the refinement solvent.
-  More expensive and only as good as the backend's analytical Hessians.
-  Unsupported on Psi4 with implicit solvent (no analytical PCM Hessians).
+- `"dft"`: Hessian from the refinement driver at the refinement level, matching
+  the refinement solvent — for `"orbmol"`, the OrbMol-v2 Hessian (despite the
+  name). More expensive and only as good as the backend's Hessians. Unsupported
+  on Psi4 with implicit solvent (no analytical PCM Hessians).
 
 Scoring never recomputes RRHO; the refinement value carries through.
 
@@ -122,11 +124,12 @@ Configured via `sampling.approach`:
 Approach 1 is the default; approach 2 is useful when you want CREST's
 physics-based site detection rather than SMARTS rules.
 
-## Two QM backends
+## QM backends
 
-Configured via `compute.driver`. Both implement the same three operations
-(`single_point`, `optimize`, `frequencies`) with the same signature, so
-`refinement.py` and `scoring.py` are backend-agnostic.
+Configured via `compute.driver`, which runs both QM stages unless
+`refinement.driver` names a different one for refinement. All drivers implement
+the same three operations (`single_point`, `optimize`, `frequencies`) with the
+same signature, so `refinement.py` and `scoring.py` are backend-agnostic.
 
 - **`"pyscf"` (default).** In-process Python library. Supports analytical PCM
   gradients (SS(V)PE, IEF-PCM, C-PCM) and SMD. Default refinement
@@ -135,6 +138,19 @@ Configured via `compute.driver`. Both implement the same three operations
   **No analytical PCM gradients** — `config.load_config` warns if you
   request `psi4` + solvent in `[refinement]`. Use gas-phase refinement with
   Psi4, or switch to PySCF.
+- **`"orbmol"` (refinement only).** The OrbMol-v2 machine-learned potential
+  (orb-models; Apache-2.0 code and weights), trained on gas-phase
+  wB97M-V/def2-TZVPD data (OMol25 + OPoly26), with total charge and spin as
+  inputs. Set `refinement.driver = "orbmol"`; `method` defaults to
+  `"OrbMol-v2"` and there is no basis. It has **no implicit solvent**, so it is
+  gas-phase only and cannot score — `config.load_config` rejects it as
+  `compute.driver` and rejects a refinement `solvent_model`. Measured against
+  wB97M-V (807 training-set structures; 29 geometry pairs): conformer/tautomer
+  energies within a charge state MAE 0.11 kcal/mol (wB97X-3c: 0.31), gas-phase
+  deprotonation energies MAE 0.14 kcal/mol vs def2-TZVPD, and its minima are
+  lower in wB97M-V energy than wB97X-3c's in 29/29 cases. Dianions are weaker.
+  CPU only, about 1 GB of RAM, seconds per optimization. See
+  `examples/glycine_orbmol.toml`.
 
 DFT integration grids are hardcoded: (99, 590) for the SCF grid, (50, 194)
 for the VV10 NLC grid. These aren't user-tunable on purpose.
@@ -155,8 +171,8 @@ output_dir/
 └── ensemble.json              # final, with Boltzmann weights
 ```
 
-Example configs in `examples/` cover both backends and both sampling
-approaches; each TOML is annotated.
+Example configs in `examples/` cover both DFT backends, OrbMol-v2 refinement,
+and both sampling approaches; each TOML is annotated.
 
 For batch runs over a CSV of SMILES, see `scripts/run_training_set.py`
 (supports `--resume`).
@@ -172,7 +188,7 @@ Source under `qm_pka/`. One-liner per module:
 | `pipeline.py` | Stage orchestration |
 | `sampling.py` | Approach 1 + Approach 2 |
 | `refinement.py`, `scoring.py` | Backend-agnostic stage runners |
-| `pyscf_runner.py`, `psi4_runner.py` | Backend implementations |
+| `pyscf_runner.py`, `psi4_runner.py`, `orbmol_runner.py` | Backend implementations (OrbMol: refinement only) |
 | `crest_runner.py`, `xtb_runner.py` | CREST/xTB subprocess wrappers |
 | `charge_enumeration.py` | SMARTS-based BFS to enumerate charge states |
 | `rdkit_utils.py` | SMILES ↔ 3D, tautomer enumeration, protomer identity, input validation |
@@ -249,6 +265,20 @@ The set of things that look weird and aren't. Read before "fixing":
   The pin sets the numbers (with the ATM three-body term) through the dftd4 C
   API; pyscf-dispersion's own `set_param` passes the wrong arguments. Don't
   bypass either.
+- **OrbMol-v2 is loaded on CPU, in float64, from a checksummed file.**
+  orb-models 0.7.0 cannot target MPS (it calls `.cuda()` for any non-CPU
+  device, and its Warp neighbour list has no MPS backend), and at ~20 atoms CPU
+  is faster anyway. float64 because geomeTRIC and the finite-difference Hessian
+  want a smooth surface; orb-models sets torch's global default dtype, so it is
+  one precision per process. The weights come from Hugging Face rather than
+  orb-models' default S3 URL (same file, ~1000x faster here) and their sha256
+  is checked on every load; `QM_PKA_ORBMOL_WEIGHTS` points at a local copy.
+- **orb-models' dependencies are bent in `pixi.toml`.** It pins
+  `dm-tree==0.1.8`, which has no py3.13 wheel and whose conda-forge builds
+  conflict with current pytorch, so the pin is overridden (orb-models only uses
+  `tree.map_structure`/`flatten`). torch comes from conda-forge and is held at
+  2.8/2.9 because newer builds need pybind11-abi 11 while PySCF's xcfun needs
+  abi 4; on linux-64 it is the MKL build, which moves libblas to MKL.
 - **D4 composite Hessians fall up to wB97X-V** (`_HESSIAN_FALLBACK`). PySCF
   has no analytical D4 Hessian, but VV10 *is* analytical. Vibrational
   frequencies are insensitive to the dispersion correction, so this is a free
