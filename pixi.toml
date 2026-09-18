@@ -12,6 +12,9 @@ typecheck = "mypy qm_pka/ tests/ scripts/"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
 
 [dependencies]
+# Without a pin, a fresh solve (a full relock, or any new environment) settles on
+# Python 3.11 on linux-64, which the package's requires-python >=3.13 rejects.
+python = "3.13.*"
 # Pin CREST 2.12 (not 3.x). The CREST 3.x rewrite moved optimization/MD/MTD
 # in-process; on macOS its conformer search collapses every ensemble to a single
 # structure (verified: n-pentane gives 1 conformer on 3.0.2 vs 6 on 2.12, on both
@@ -26,24 +29,32 @@ gcp-correction = ">=2.3.2,<3"
 # build >=4 also fixes the build-2 Fortran format-string bug (grimme-lab/xtb#1332).
 xtb = ">=6.7.1"
 psi4 = ">=1.10,<2"
+# libxc 7.1 removed functionals (mgga_x_ms2bs, mgga_x_mvsb, gga_xc_th_fl, ...)
+# that Psi4 1.10 builds into its functional table at import, so Psi4 1.10 dies on
+# import with 7.1.x.  Newer Psi4 is out of reach (it needs pybind11-abi 11; PySCF
+# needs xcfun 2.1.1, built only against abi 4 for Python 3.13).  This pin also
+# keeps PySCF below 2.14, which requires libxc >=7.1.2.
+libxc-c = "7.0.*"
 rdkit = ">=2024.03,<2026"
 pytest = ">=9.0.3,<10"
 mypy = ">=1.20.0,<2"
 # DFT backends: Psi4 (subprocess) and PySCF (Python library).
 # Psi4: wB97X-3c gas-phase (no analytical PCM gradients).
 # PySCF: wB97X-3c/vDZP (default refinement) or wB97M-V + SMD (scoring).
-# Capped <2.13: PySCF 2.13's dispersion rewrite (PR #3209) breaks our D4
-# composite registration — wB97X-3c/-D4rev silently get plain wB97X D4
-# params (wrong E_disp, corrupts energies + geometries). PySCF's dispersion
-# handling is still in flux post-2.13 (see ~v2.16 renames), so there's no
-# stable fix + new floor to adopt yet; keep <2.13 until it settles.
-pyscf = ">=2.7,<2.13"
-# Dispersion corrections: dftd3-python and dftd4-python provide the shared
-# libraries used by both Psi4 and PySCF. pyscf-dispersion is the PySCF
-# extension that bridges PySCF's XC string parsing to these libraries.
+# PySCF 2.13.1 rewrote its dispersion dispatch (PR #3209); pyscf_runner detects
+# which dispatch it has and sets the D4 composites up accordingly.  Verified on
+# 2.11.0, 2.13.1 and 2.14.0 (2.7.0-2.13.0 share 2.11's dispersion code).  The
+# upper bound is the last verified release: v2.16 has announced further
+# dispersion changes, so re-run the pyscf tests on it before raising it.
+pyscf = ">=2.7,<2.15"
+# Dispersion corrections.  dftd3-python and dftd4-python provide the libraries
+# Psi4 uses.  PySCF does not use them: pyscf-dispersion bundles its own
+# libdftd4/libs-dftd3, whose parameter names differ by release (see
+# pyscf_runner._D4_PARAMS).  pyscf-dispersion >=1.3 because 1.2 bundles dftd4
+# 3.6.0, which does not know "wb97x-3c" or "wb97x-rev".
 dftd3-python = ">=1.0"
 dftd4-python = ">=4.0"
-pyscf-dispersion = ">=1.0"
+pyscf-dispersion = ">=1.3"
 # Basis set exchange: provides vDZP basis set for wB97X-3c (not in PySCF's
 # built-in basis library).
 basis_set_exchange = ">=0.12,<0.13"
@@ -53,3 +64,4 @@ geometric = ">=1.0"
 [pypi-dependencies]
 qm-pka = { path = ".", editable = true }
 ruff = ">=0.11,<1"
+

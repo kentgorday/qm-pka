@@ -4417,7 +4417,7 @@ packages:
 - pypi: ./
   name: qm-pka
   version: 0.1.0
-  sha256: a4a26f1aa87530fa81f4d1147a44315aa63408bd054832ca1bc25e6bcfc90178
+  sha256: 8e478f856b416262f736931eae5f30be3588dea265f8a29b5a608b0315a43293
   requires_python: '>=3.13'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/rdkit-2025.09.6-py313h66a1ddb_1.conda
   sha256: ab3f768f83a8a1b73d6b2da4f9452074b13faaebc077a0abac91cfe00329b914

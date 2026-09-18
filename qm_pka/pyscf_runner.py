@@ -5,11 +5,11 @@ calculations. Uses an (99, 590) integration grid for all DFT calculations
 and a (50, 194) NLC grid for VV10-containing functionals, with NWChem
 region-based grid pruning.
 
-Composite methods based on wB97X-V (wB97X-D4, wB97X-D4rev, wB97X-3c) are
-registered with PySCF's dispersion dispatch so that the correct D4 parameters
-from dftd4 are used. All three share the reparameterized wB97X-V exchange-
-correlation functional (libxc 466), which is distinct from the original wB97X
-(libxc 464).
+Composite methods based on wB97X-V (wB97X-D4, wB97X-D4rev, wB97X-3c) are set
+up by _set_method in whichever way this PySCF's dispersion dispatch accepts, and
+their D4 parameters are pinned explicitly (see _D4_PARAMS). All three share the
+reparameterized wB97X-V exchange-correlation functional (libxc 466), which is
+distinct from the original wB97X (libxc 464).
 """
 
 from __future__ import annotations
@@ -56,17 +56,40 @@ _AUXBASIS = "def2-universal-jkfit"
 # ---------------------------------------------------------------------------
 # wB97X-V + D4 composite methods
 # ---------------------------------------------------------------------------
-# PySCF natively maps "wb97x-d4" to libxc 464 (original wB97X, 2008) + D4.
-# This is WRONG for wB97X-D4 as defined by dftd4, which uses the
-# reparameterized wB97X-V functional (libxc 466, 2013) with D4 dispersion
-# instead of VV10.  We register these composite methods correctly.
+# PySCF natively maps "wb97x-d4" to libxc 464 (original wB97X, 2008) + D4
+# (still its default in 2.14, with a FutureWarning that v2.16 will switch).
+# That is not wB97X-D4 as defined by dftd4, which uses the reparameterized
+# wB97X-V functional (libxc 466, 2013) with D4 dispersion instead of VV10.
+# _set_method builds these composites itself rather than passing the name on.
 #
-# Mapping: user method name -> (internal xc string, dftd4 param name)
+# Mapping: user method name -> (XC functional, dftd4 param name)
 # All use wB97X-V (466) as the XC functional with VV10 disabled.
 _D4_COMPOSITES: dict[str, tuple[str, str]] = {
     "wb97x-d4": ("wb97x-v", "wb97x"),
     "wb97x-d4rev": ("wb97x-v", "wb97x-rev"),
     "wb97x-3c": ("wb97x-v", "wb97x-3c"),
+}
+
+# D4 rational-damping parameters for the composites, keyed by the dftd4 name
+# in _D4_COMPOSITES and copied from dftd4 >= 4.0 parameters.toml (the
+# "bj-eeq-atm" sets: all were fitted with the ATM three-body term, s9 = 1).
+#
+# They are set explicitly rather than looked up by name because PySCF uses the
+# libdftd4 bundled inside pyscf-dispersion, and that library's name table is
+# not stable across releases.  pyscf-dispersion 1.3.0 bundles libdftd4 3.7.0,
+# where "wb97x" is the D4 fit for the *2008* wB97X functional (s8 = -0.0752);
+# dftd4 PR #276 renamed that to "wb97x-2008" and gave "wb97x" to the fit that
+# replaces VV10 in wB97X-V -- the one wB97X-D4 means here.  And with PySCF
+# < 2.13.1, pyscf-dispersion 1.5 drops the ATM term these fits include.
+# Pinning the numbers makes both independent of whichever libdftd4 is installed.
+_D4_PARAMS: dict[str, dict[str, float]] = {
+    # wB97X-D4: Najibi & Goerigk, J. Comput. Chem. 2020, 41, 2562
+    # (doi:10.1002/jcc.26411)
+    "wb97x": {"s6": 1.0, "s8": 0.5093, "a1": 0.0662, "a2": 5.4487, "s9": 1.0},
+    # wB97X-D4rev and wB97X-3c: Mueller, Hansen & Grimme, J. Chem. Phys. 2023,
+    # 158, 014103 (doi:10.1063/5.0133026)
+    "wb97x-rev": {"s6": 1.0, "s8": 0.4485, "a1": 0.3306, "a2": 4.279, "s9": 1.0},
+    "wb97x-3c": {"s6": 1.0, "s8": 0.0, "a1": 0.2464, "a2": 4.737, "s9": 1.0},
 }
 
 # Methods where the Hessian should "fall up" to wB97X-V (with VV10) for
@@ -79,12 +102,35 @@ _HESSIAN_FALLBACK: dict[str, str] = {
 }
 
 
+def _d4_colon_syntax() -> bool:
+    """Whether PySCF takes the dftd4 parameter name in ``mf.disp`` ("d4:<name>").
+
+    PySCF 2.13.1 rewrote its dispersion dispatch (PR #3209).  Before it, the
+    dftd4 name could only come from the XC string, which is what
+    _register_d4_composites relies on.  From it on, XC_MAP is keyed on the
+    parsed functional, so every wB97X-V composite registered that way would be
+    sent to dftd4 as "wb97x"; the name has to be passed as ``mf.disp`` instead.
+    ``parse_disp`` gained its ``disp`` argument in the same change, so probe
+    that rather than compare version numbers.
+    """
+    from pyscf.scf import dispersion
+
+    try:
+        return bool(dispersion.parse_disp(None, "d4:wb97x-3c")[:2] == ("wb97x-3c", "d4"))
+    except TypeError:  # parse_disp(dft_method) only: PySCF < 2.13.1
+        return False
+
+
+_D4_COLON_SYNTAX = _d4_colon_syntax()
+
+
 def _register_d4_composites() -> None:
     """Register wB97X-V+D4 composite methods with PySCF's dispersion dispatch.
 
-    PySCF's libxc.parse_xc uses pyscf.scf.dispersion.parse_dft to extract
-    the base XC code from method strings containing '-D3' or '-D4'.  We add
-    entries to the internal _white_list and XC_MAP so that:
+    Only for PySCF < 2.13.1 (see _d4_colon_syntax).  PySCF's libxc.parse_xc
+    uses pyscf.scf.dispersion.parse_dft to extract the base XC code from method
+    strings containing '-D3' or '-D4'.  We add entries to the internal
+    _white_list and XC_MAP so that:
       - The XC functional evaluates as wB97X-V (libxc 466)
       - VV10 nonlocal correlation is disabled (nlc=False)
       - D4 dispersion is requested
@@ -104,7 +150,70 @@ def _register_d4_composites() -> None:
     dispersion.parse_disp.cache_clear()
 
 
-_register_d4_composites()
+if not _D4_COLON_SYNTAX:
+    # Newer PySCF must not get these: "wb97x-d4" is a native name there (2.14).
+    _register_d4_composites()
+
+
+def _pin_d4_parameters() -> None:
+    """Make PySCF's D4 model use the parameters in _D4_PARAMS.
+
+    Energies, gradients and Hessians each construct
+    ``pyscf.dispersion.dftd4.DFTD4Dispersion(mol, xc=<dftd4 name>, ...)``, looking
+    the class up on the module at call time.  Replacing it with a subclass that
+    overrides the named parameters covers all three paths.  Names not in
+    _D4_PARAMS keep whatever the bundled libdftd4 defines.
+
+    The wrapper's own ``set_param`` is not used: it calls
+    ``dftd4_new_rational_damping`` without the leading error handle the C API
+    requires (pyscf-dispersion 1.3.0 and 1.5.0 alike), so libdftd4 receives
+    whatever is left in the pointer register -- sometimes NULL, which surfaces
+    later as "Damping parameters are missing".
+    """
+    import ctypes
+
+    from pyscf.dispersion import dftd4
+
+    if getattr(dftd4.DFTD4Dispersion, "_qm_pka_pinned_params", False):
+        return  # idempotent: never double-wrap
+
+    base = dftd4.DFTD4Dispersion
+    lib = dftd4.libdftd4
+
+    class DFTD4Dispersion(base):  # type: ignore[misc, valid-type]
+        _qm_pka_pinned_params = True
+        _param: Any
+
+        def __init__(self, mol: Any, xc: str, *args: Any, **kwargs: Any) -> None:
+            # The base class still loads the named parameters (and fails on an
+            # unknown name), so each key in _D4_PARAMS must exist in the bundled
+            # libdftd4 -- all three do in 3.7.0 and 4.x, with different values.
+            super().__init__(mol, xc, *args, **kwargs)
+            p = _D4_PARAMS.get(xc.lower())
+            if p is None:
+                return
+            err = lib.dftd4_new_error()
+            try:
+                param = lib.dftd4_new_rational_damping(
+                    err,
+                    ctypes.c_double(p["s6"]),
+                    ctypes.c_double(p["s8"]),
+                    ctypes.c_double(p["s9"]),
+                    ctypes.c_double(p["a1"]),
+                    ctypes.c_double(p["a2"]),
+                    ctypes.c_double(16.0),  # alp: the ATM damping exponent, dftd4's default
+                )
+                dftd4.error_check(err)
+            finally:
+                lib.dftd4_delete_error(ctypes.byref(err))
+            lib.dftd4_delete_param(ctypes.byref(self._param))
+            self._param = param
+
+    DFTD4Dispersion._qm_pka_original = base
+    dftd4.DFTD4Dispersion = DFTD4Dispersion
+
+
+_pin_d4_parameters()
 
 
 def _patch_einsum_path_for_numpy24() -> None:
@@ -182,15 +291,28 @@ def _patch_pcm_ecp_cavity() -> None:
     ``gen_surface`` to expose true nuclear charges for the duration of the call.
     Every caller (PCM and SMD) reaches the function via ``pcm.gen_surface``, so a
     single reassignment covers them all.  gpu4pyscf has its own, already-correct
-    ``gen_surface`` and is untouched.  This is the interim fix for an upstream
-    PySCF bug (its line should use ``gto.charge`` like the per-sphere loop does).
+    ``gen_surface`` and is untouched.
+
+    PySCF fixed this upstream in 2.13.0 (radii now come from ``mol.elements``),
+    so the wrapper is installed only while ``gen_surface`` still reads
+    ``mol.atom_charges()``.  If the source cannot be read, it is installed
+    anyway: on a fixed PySCF it is a no-op.
     """
+    import inspect
+
     import numpy
     import pyscf.solvent.pcm as pcm
     from pyscf import gto
 
     if getattr(pcm.gen_surface, "_ecp_cavity_patched", False):
         return  # idempotent: never double-wrap
+
+    try:
+        src = inspect.getsource(pcm.gen_surface)
+    except (OSError, TypeError):
+        src = None
+    if src is not None and "mol.atom_charges()" not in src:
+        return  # fixed upstream
 
     _orig_gen_surface = pcm.gen_surface
 
@@ -215,20 +337,26 @@ def _patch_pcm_ecp_cavity() -> None:
 _patch_pcm_ecp_cavity()
 
 
-def _resolve_method(method: str) -> tuple[str, str | None]:
-    """Resolve a user-facing method name to a PySCF xc string.
+def _set_method(mf: Any, method: str) -> None:
+    """Point a PySCF KS object at a user-facing method name.
 
-    For D4 composite methods (wB97X-D4, wB97X-D4rev, wB97X-3c), returns
-    the internal name registered with PySCF's dispersion dispatch.
-
-    Returns (xc_string, d4_param_name_or_None).
+    Most names go straight to ``mf.xc`` and PySCF parses them natively (e.g.
+    "wB97X-D3BJ" dispatches D3BJ via pyscf-dispersion, "wB97M-V" enables VV10
+    via libxc).  The D4 composites are wB97X-V with VV10 off and D4 on; how the
+    dftd4 parameter name reaches PySCF depends on its version (see
+    _d4_colon_syntax), while _pin_d4_parameters supplies the numbers either way.
     """
     key = method.lower().replace("_", "-")
-    if key in _D4_COMPOSITES:
-        _xc, d4_param = _D4_COMPOSITES[key]
-        # Internal name: e.g. "wb97x-3c" -> "wb97x-3c-d4"
-        return f"{d4_param}-d4", d4_param
-    return method, None
+    if key not in _D4_COMPOSITES:
+        mf.xc = method
+        return
+    xc, d4_param = _D4_COMPOSITES[key]
+    if _D4_COLON_SYNTAX:
+        mf.xc = xc
+        mf.nlc = False  # D4 replaces VV10
+        mf.disp = f"d4:{d4_param}"
+    else:
+        mf.xc = f"{d4_param}-d4"  # the name _register_d4_composites registered
 
 
 def _resolve_basis(
@@ -326,7 +454,6 @@ def _build_mf(
 
     lib.num_threads(threads)
 
-    xc_string, _d4_param = _resolve_method(method)
     resolved_basis, resolved_ecp = _resolve_basis(basis, list(geom.symbols))
 
     mol = gto.Mole()
@@ -352,11 +479,8 @@ def _build_mf(
     # mean field and density fitting is attached underneath it afterwards.
     mf = mf.density_fit(auxbasis=_AUXBASIS)
 
-    # Set the XC functional.  For most methods PySCF parses the string
-    # natively (e.g. "wB97X-D3BJ" dispatches D3BJ via pyscf-dispersion,
-    # "wB97M-V" enables VV10 via libxc).  For D4 composites the string
-    # was rewritten by _resolve_method to the registered internal name.
-    mf.xc = xc_string
+    # XC functional, plus VV10/dispersion settings for the D4 composites.
+    _set_method(mf, method)
 
     # Integration grid: (99, 590) for all DFT calculations, with NWChem
     # region-based pruning (PySCF's default scheme; the closest analog to
@@ -365,8 +489,7 @@ def _build_mf(
     mf.grids.prune = dft.gen_grid.nwchem_prune
 
     # VV10 NLC grid for functionals with active nonlocal correlation.
-    # D4 composites disable VV10 (nlc=False in the registration), so
-    # they won't reach this branch.
+    # D4 composites have VV10 switched off, so they won't reach this branch.
     method_lower = method.lower().replace("_", "-")
     if method_lower in _VV10_XC:
         mf.nlcgrids.atom_grid = (50, 194)

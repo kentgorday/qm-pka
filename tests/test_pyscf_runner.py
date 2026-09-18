@@ -1,60 +1,87 @@
-"""Tests for PySCF DFT runner, focusing on D4 composite method registration."""
+"""Tests for PySCF DFT runner, focusing on the D4 composite methods."""
 
 from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
 
 import numpy as np
 import pytest
 from pyscf import dft, gto
 from pyscf.dft import libxc
 
-# Import triggers D4 composite registration and the PCM ECP-cavity patch
+# Import applies the D4 parameter pin, and the composite registration and PCM
+# ECP-cavity patch where this PySCF needs them
 from qm_pka.pyscf_runner import (
+    _D4_COLON_SYNTAX,
     _D4_COMPOSITES,
+    _D4_PARAMS,
     _HESSIAN_FALLBACK,
     _build_mf,
     _resolve_basis,
-    _resolve_method,
+    _set_method,
     optimize,
     single_point,
 )
 from qm_pka.types import Geometry
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
+_WATER = "O 0 0 0; H 0 0 0.96; H 0 0.96 0"
+
+
 @pytest.fixture()
 def water_mol() -> gto.Mole:
     mol = gto.Mole()
-    mol.atom = "O 0 0 0; H 0 0 0.96; H 0 0.96 0"
+    mol.atom = _WATER
     mol.basis = "def2-svp"
     mol.verbose = 0
     mol.build()
     return mol
 
 
-# ---------------------------------------------------------------------------
-# _resolve_method tests
-# ---------------------------------------------------------------------------
-class TestResolveMethod:
-    @pytest.mark.parametrize(
-        "method,expected_d4_param",
-        [
-            ("wb97x-d4", "wb97x"),
-            ("wb97x-d4rev", "wb97x-rev"),
-            ("wb97x-3c", "wb97x-3c"),
-        ],
-    )
-    def test_d4_composites_detected(self, method: str, expected_d4_param: str) -> None:
-        xc_string, d4_param = _resolve_method(method)
-        assert d4_param == expected_d4_param
-        assert "-d4" in xc_string  # internal name has -d4 suffix
+def _ks(mol: gto.Mole, method: str) -> dft.rks.RKS:
+    """An RKS object set up for ``method`` exactly as the runner does it."""
+    mf = dft.RKS(mol)
+    _set_method(mf, method)
+    return mf
 
+
+# ---------------------------------------------------------------------------
+# _set_method tests
+# ---------------------------------------------------------------------------
+class TestSetMethod:
     @pytest.mark.parametrize("method", ["wb97x-v", "wb97m-v", "wb97x-d3bj", "b3lyp"])
-    def test_non_composites_pass_through(self, method: str) -> None:
-        xc_string, d4_param = _resolve_method(method)
-        assert xc_string == method
-        assert d4_param is None
+    def test_non_composites_pass_through(self, method: str, water_mol: gto.Mole) -> None:
+        assert _ks(water_mol, method).xc == method
+
+    @pytest.mark.parametrize("method", list(_D4_COMPOSITES))
+    def test_composite_route(self, method: str, water_mol: gto.Mole) -> None:
+        # New PySCF takes the dftd4 name via mf.disp and must not see our
+        # registered names ("wb97x-d4" is one of its own from 2.14); old PySCF
+        # can only get it through the registered XC name.
+        from pyscf.scf import dispersion
+
+        d4_param = _D4_COMPOSITES[method][1]
+        internal = f"{d4_param}-d4"
+        mf = _ks(water_mol, method)
+        if _D4_COLON_SYNTAX:
+            assert (mf.xc, mf.nlc, mf.disp) == ("wb97x-v", False, f"d4:{d4_param}")
+            assert internal not in dispersion.XC_MAP
+        else:
+            assert mf.xc == internal
+            assert dispersion.XC_MAP[internal] == d4_param
+
+    def test_route_detection_matches_known_boundary(self) -> None:
+        # PR #3209 changed the dispatch in 2.13.1; the runner probes for it
+        # rather than comparing versions, and this pins the two together.
+        import pyscf
+
+        version = tuple(int(x) for x in re.findall(r"\d+", pyscf.__version__)[:3])
+        assert (version >= (2, 13, 1)) == _D4_COLON_SYNTAX
 
 
 # ---------------------------------------------------------------------------
@@ -99,9 +126,9 @@ class TestResolveBasis:
 # PCM cavity correction for ECP atoms (monkeypatch of pyscf.solvent.pcm)
 # ---------------------------------------------------------------------------
 class TestPCMECPCavity:
-    """Importing pyscf_runner patches ``pcm.gen_surface`` so the solvent cavity
-    switching radii use the true nuclear charge rather than the ECP-reduced
-    ``mol.atom_charges()``."""
+    """The PCM cavity switching radii must use the true nuclear charge rather than
+    the ECP-reduced ``mol.atom_charges()``: via the ``pcm.gen_surface`` patch on
+    PySCF < 2.13.0, natively from 2.13.0 (where the patch is not installed)."""
 
     def _cavity_npts(self, basis: str) -> int:
         geom = Geometry(
@@ -112,53 +139,12 @@ class TestPCMECPCavity:
         mf.with_solvent.build()
         return int(mf.with_solvent.surface["grid_coords"].shape[0])
 
-    def test_patch_installed(self) -> None:
-        import pyscf.solvent.pcm as pcm
-
-        assert getattr(pcm.gen_surface, "_ecp_cavity_patched", False)
-
     def test_ecp_basis_matches_all_electron_cavity(self) -> None:
         # Same geometry: an ECP basis (vDZP) must build the SAME PCM cavity as an
         # all-electron basis (def2-SVP), since the switching radii use true
-        # nuclear charge in both.  Without the patch the vDZP (ECP) cavity differs
+        # nuclear charge in both.  Without the fix the vDZP (ECP) cavity differs
         # (oxygen's switching radius collapses to carbon's), changing the count.
         assert self._cavity_npts("vDZP") == self._cavity_npts("def2-svp")
-
-    # Upstream-drift tripwire: the monkeypatch wraps an internal PySCF function
-    # and relies on it reading mol.atom_charges() for the switching radii.  Pin
-    # the source so any change to that function fails here until someone
-    # re-reviews _patch_pcm_ecp_cavity, then re-blesses the values below.
-    _PINNED_PYSCF = "2.11.0"
-    _PINNED_HASH = "c3664f90b7f761deb85cef6bd5b339965bbd911c461f59786c453606c343e57c"
-
-    def test_upstream_gen_surface_unchanged(self) -> None:
-        import hashlib
-        import inspect
-
-        import pyscf
-        import pyscf.solvent.pcm as pcm
-
-        original = getattr(pcm.gen_surface, "_ecp_cavity_original", None)
-        assert original is not None, "ECP cavity patch not applied"
-        try:
-            src = inspect.getsource(original)
-        except (OSError, TypeError):
-            pytest.skip("pyscf.solvent.pcm.gen_surface source unavailable")
-
-        # Actionable invariant: the exact behaviour the patch corrects.
-        assert "mol.atom_charges()" in src, (
-            "pyscf gen_surface no longer reads mol.atom_charges() for the cavity "
-            "radii — the ECP cavity patch may be obsolete or broken. Re-review "
-            "qm_pka.pyscf_runner._patch_pcm_ecp_cavity."
-        )
-
-        actual = hashlib.sha256(src.encode()).hexdigest()
-        assert actual == self._PINNED_HASH, (
-            "pyscf.solvent.pcm.gen_surface source changed "
-            f"(pinned pyscf {self._PINNED_PYSCF}, running {pyscf.__version__}). "
-            "Re-review qm_pka.pyscf_runner._patch_pcm_ecp_cavity against the new "
-            f"implementation, then update _PINNED_PYSCF/_PINNED_HASH to {actual!r}."
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -171,10 +157,9 @@ class TestD4CompositeXC:
     LIBXC_WB97X = 464
 
     @pytest.mark.parametrize("method", list(_D4_COMPOSITES))
-    def test_uses_wb97x_v_functional(self, method: str) -> None:
+    def test_uses_wb97x_v_functional(self, method: str, water_mol: gto.Mole) -> None:
         """D4 composites must use the reparameterized wB97X-V (466)."""
-        xc_string, _ = _resolve_method(method)
-        _, fac_list = libxc.parse_xc(xc_string)
+        _, fac_list = libxc.parse_xc(_ks(water_mol, method).xc)
         func_id = int(fac_list[0][0])
         assert func_id == self.LIBXC_WB97X_V, (
             f"{method} uses libxc {func_id}, expected {self.LIBXC_WB97X_V} (wB97X-V)"
@@ -189,9 +174,7 @@ class TestD4CompositeNoVV10:
 
     @pytest.mark.parametrize("method", list(_D4_COMPOSITES))
     def test_no_vv10(self, method: str, water_mol: gto.Mole) -> None:
-        xc_string, _ = _resolve_method(method)
-        mf = dft.RKS(water_mol)
-        mf.xc = xc_string
+        mf = _ks(water_mol, method)
         assert not mf.do_nlc(), f"{method} has VV10 enabled"
 
 
@@ -204,9 +187,7 @@ class TestD4CompositeDispersion:
     @pytest.mark.parametrize("method", list(_D4_COMPOSITES))
     @pytest.mark.slow
     def test_d4_dispersion_applied(self, method: str, water_mol: gto.Mole) -> None:
-        xc_string, _ = _resolve_method(method)
-        mf = dft.RKS(water_mol)
-        mf.xc = xc_string
+        mf = _ks(water_mol, method)
         mf.grids.atom_grid = (50, 194)  # small grid for speed
         mf.verbose = 0
         mf.kernel()
@@ -224,9 +205,7 @@ class TestD4ParametersDistinct:
     def test_d4_energies_differ(self, water_mol: gto.Mole) -> None:
         d4_energies: dict[str, float] = {}
         for method in _D4_COMPOSITES:
-            xc_string, _ = _resolve_method(method)
-            mf = dft.RKS(water_mol)
-            mf.xc = xc_string
+            mf = _ks(water_mol, method)
             mf.grids.atom_grid = (50, 194)
             mf.verbose = 0
             mf.kernel()
@@ -242,6 +221,106 @@ class TestD4ParametersDistinct:
 
 
 # ---------------------------------------------------------------------------
+# D4 parameters match dftd4's own definitions
+# ---------------------------------------------------------------------------
+# dftd4-python's reference D4 for the water fixture, computed in a fresh process.
+# Not in-process: pyscf-dispersion >= 1.5 bundles a libdftd4 with the same
+# install name as conda's (libdftd4.4.dylib) but an older API, and once
+# pyscf_runner has loaded it, dftd4-python's C extension binds to it and fails
+# to import (missing dftd4_set_model_realspace_cutoff).
+_D4_REFERENCE_SCRIPT = """
+import json, sys
+import numpy as np
+from dftd4.interface import DampingParam, DispersionModel
+numbers, positions, charge, names = json.load(sys.stdin)
+model = DispersionModel(np.array(numbers), np.array(positions), charge=charge)
+out = {}
+for name in names:
+    res = model.get_dispersion(DampingParam(method=name, atm=True), grad=True)
+    out[name] = {"energy": float(res["energy"]), "gradient": np.asarray(res["gradient"]).tolist()}
+json.dump(out, sys.stdout)
+"""
+
+
+@pytest.fixture(scope="module")
+def d4_reference() -> dict[str, dict[str, np.ndarray]]:
+    mol = gto.M(atom=_WATER, basis="def2-svp", verbose=0)
+    names = [*sorted(_D4_PARAMS), "wb97x-2008"]
+    payload = [mol.atom_charges().tolist(), mol.atom_coords().tolist(), mol.charge, names]
+    proc = subprocess.run(
+        [sys.executable, "-c", _D4_REFERENCE_SCRIPT],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    raw = json.loads(proc.stdout)
+    return {
+        name: {"energy": np.asarray(v["energy"]), "gradient": np.asarray(v["gradient"])}
+        for name, v in raw.items()
+    }
+
+
+class TestD4ParametersMatchDftd4:
+    """PySCF's D4 for each composite must equal standalone dftd4-python's.
+
+    PySCF evaluates D4 with the libdftd4 bundled in pyscf-dispersion, whose
+    name table differs by release (3.7.0 maps "wb97x" to the wB97X-2008 fit),
+    so _pin_d4_parameters sets the numbers explicitly.  These tests compare
+    against the conda dftd4-python package, an independent build of the
+    reference parameters, through the same dispersion hooks SCF energies and
+    nuclear gradients use.  No SCF is needed: D4 depends only on geometry.
+    """
+
+    @pytest.mark.parametrize("d4_name", sorted(_D4_PARAMS))
+    def test_param_table_matches_dftd4(self, d4_name: str) -> None:
+        from dftd4.parameters import get_damping_param
+
+        ref = get_damping_param(d4_name)
+        for key, value in _D4_PARAMS[d4_name].items():
+            assert value == pytest.approx(ref[key]), (d4_name, key, value, ref[key])
+
+    @pytest.mark.parametrize("method", list(_D4_COMPOSITES))
+    def test_energy_matches_dftd4(
+        self, method: str, water_mol: gto.Mole, d4_reference: dict[str, dict[str, np.ndarray]]
+    ) -> None:
+        mf = _ks(water_mol, method)
+        ref = d4_reference[_D4_COMPOSITES[method][1]]
+        assert float(mf.get_dispersion()) == pytest.approx(float(ref["energy"]), rel=1e-10)
+
+    @pytest.mark.parametrize("method", list(_D4_COMPOSITES))
+    def test_gradient_matches_dftd4(
+        self, method: str, water_mol: gto.Mole, d4_reference: dict[str, dict[str, np.ndarray]]
+    ) -> None:
+        mf = _ks(water_mol, method)
+        ref = d4_reference[_D4_COMPOSITES[method][1]]
+        grad = mf.nuc_grad_method().get_dispersion()
+        np.testing.assert_allclose(grad, ref["gradient"], rtol=1e-9, atol=1e-12)
+
+    @pytest.mark.parametrize("method", list(_D4_COMPOSITES))
+    def test_solvated_energy_matches_dftd4(
+        self, method: str, d4_reference: dict[str, dict[str, np.ndarray]]
+    ) -> None:
+        # The solvent wrapper _build_mf applies must carry the composite's
+        # dispersion settings over (mf.disp and mf.nlc on the newer route).
+        mol = gto.M(atom=_WATER, verbose=0)
+        geom = Geometry(symbols=tuple(mol.elements), coords=mol.atom_coords(unit="Angstrom"))
+        _mol, mf = _build_mf(geom, 0, method, "def2-svp", "SSVPE", "water")
+        ref = d4_reference[_D4_COMPOSITES[method][1]]
+        assert not mf.do_nlc()
+        assert float(mf.get_dispersion()) == pytest.approx(float(ref["energy"]), rel=1e-10)
+
+    def test_wb97x_d4_is_not_the_2008_fit(
+        self, water_mol: gto.Mole, d4_reference: dict[str, dict[str, np.ndarray]]
+    ) -> None:
+        # Regression: before the parameters were pinned, wB97X-D4 silently got
+        # the D4 fit for the 2008 wB97X functional from the bundled libdftd4.
+        mf = _ks(water_mol, "wb97x-d4")
+        wrong = d4_reference["wb97x-2008"]
+        assert not np.isclose(float(mf.get_dispersion()), float(wrong["energy"]), atol=1e-8)
+
+
+# ---------------------------------------------------------------------------
 # D4 dispersion in gradients
 # ---------------------------------------------------------------------------
 class TestD4Gradients:
@@ -251,11 +330,8 @@ class TestD4Gradients:
     @pytest.mark.parametrize("method", list(_D4_COMPOSITES))
     def test_gradient_includes_d4(self, method: str, water_mol: gto.Mole) -> None:
         """Compare gradient with and without D4 to verify it contributes."""
-        xc_string, _ = _resolve_method(method)
-
         # With D4
-        mf_d4 = dft.RKS(water_mol)
-        mf_d4.xc = xc_string
+        mf_d4 = _ks(water_mol, method)
         mf_d4.grids.atom_grid = (50, 194)
         mf_d4.verbose = 0
         mf_d4.kernel()

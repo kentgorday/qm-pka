@@ -229,12 +229,26 @@ The set of things that look weird and aren't. Read before "fixing":
   external `xtb` binary and works; pinning it moves only `crest` (xtb and all
   DFT deps stay put). Consequence: `single_point()` and `frequencies()` call
   `xtb` directly, since CREST 2.x has no `--sp` run mode.
-- **wB97X-D4 / wB97X-D4rev / wB97X-3c are re-registered with PySCF**
-  (`pyscf_runner.py::_register_d4_composites`). PySCF's native `wb97x-d4`
-  string maps to libxc 464 (the original 2008 wB97X) plus D4. The actual
-  D4-parameterized methods use libxc 466 (the reparameterized
-  wB97X-V exchange-correlation, with VV10 disabled). The registration patches
-  PySCF's dispersion dispatch to do the right thing. Don't bypass it.
+- **wB97X-D4 / wB97X-D4rev / wB97X-3c are built by `pyscf_runner.py::_set_method`,
+  never passed to PySCF by name.** All three are the reparameterized wB97X-V
+  exchange-correlation (libxc 466) with VV10 off and D4 on; PySCF's native
+  `wb97x-d4` means the original 2008 wB97X (libxc 464) plus D4. How the dftd4
+  parameter name reaches PySCF depends on its dispersion dispatch, which PySCF
+  2.13.1 rewrote (PR #3209), so `_set_method` probes for it: on older PySCF,
+  `_register_d4_composites` registers internal XC names in PySCF's dispatch
+  tables; from 2.13.1 nothing is registered and the name goes in
+  `mf.disp = "d4:<name>"` (registering there would be wrong — XC_MAP is keyed
+  on the parsed functional, and 2.14 has a native `wb97x-d4` of its own). Both
+  routes were verified (2.11, 2.13.1, 2.14); the tests build composites through
+  `_set_method`, so they exercise whichever route the installed PySCF takes.
+- **The D4 parameters of those composites are pinned** (`_D4_PARAMS`, installed
+  by `_pin_d4_parameters`). PySCF evaluates D4 with the libdftd4 bundled inside
+  pyscf-dispersion — not the conda `dftd4` Psi4 uses — and its parameter names
+  move between releases: in pyscf-dispersion 1.3.0's copy, `wb97x` is the fit
+  for the 2008 functional, which is what wB97X-D4 silently got before the pin.
+  The pin sets the numbers (with the ATM three-body term) through the dftd4 C
+  API; pyscf-dispersion's own `set_param` passes the wrong arguments. Don't
+  bypass either.
 - **D4 composite Hessians fall up to wB97X-V** (`_HESSIAN_FALLBACK`). PySCF
   has no analytical D4 Hessian, but VV10 *is* analytical. Vibrational
   frequencies are insensitive to the dispersion correction, so this is a free
