@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from qm_pka.config import DEFAULT_MEMORY_GB
+from qm_pka.geometric_logging import geometric_quiet
 from qm_pka.types import Geometry
 
 log = logging.getLogger(__name__)
@@ -637,7 +638,7 @@ def optimize(
         # each step via geomeTRIC's callback; the last one corresponds to the
         # returned geometry, since convergence is checked after the final step.
         energies: list[float] = []
-        with tempfile.TemporaryDirectory(prefix="pyscf_opt_") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="pyscf_opt_") as tmpdir, geometric_quiet():
             conv, mol_opt = geom_kernel(
                 mf_local,
                 maxsteps=maxsteps,

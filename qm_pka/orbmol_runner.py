@@ -18,13 +18,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import logging.config
 import os
 import tempfile
 import uuid
 import warnings
-from collections.abc import Iterator
-from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache
 from typing import Any
@@ -33,6 +30,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from qm_pka.config import DEFAULT_MEMORY_GB
+from qm_pka.geometric_logging import geometric_quiet
 from qm_pka.types import Geometry
 
 log = logging.getLogger(__name__)
@@ -210,7 +208,7 @@ def optimize(
 
     def _run(start: Geometry, coordsys: str) -> tuple[Geometry, float, bool]:
         engine = _Engine(start)
-        with tempfile.TemporaryDirectory(prefix="orbmol_opt_") as tmpdir, _geometric_quiet():
+        with tempfile.TemporaryDirectory(prefix="orbmol_opt_") as tmpdir, geometric_quiet():
             try:
                 progress = geometric.optimize.run_optimizer(
                     customengine=engine,
@@ -235,36 +233,6 @@ def optimize(
         "retrying from last geometry with Cartesian coords"
     )
     return _run(opt_geom, "cart")
-
-
-# geomeTRIC's loggers.  Every module logs through geometric.nifty's logger, which
-# sets its own level to INFO (so a level on the "geometric" parent has no
-# effect); the other two are its fallbacks outside the package.
-_GEOMETRIC_LOGGERS = ("geometric.nifty", "NiftyLogger", "MoleculeLogger")
-
-
-@contextmanager
-def _geometric_quiet() -> Iterator[None]:
-    """Run geomeTRIC without letting it touch the application's logging.
-
-    ``geometric.optimize.run_optimizer`` calls ``logging.config.fileConfig`` on
-    every optimization, which closes and removes the handlers already installed
-    (the pipeline's) and reconfigures the root logger -- with a quiet config the
-    pipeline's own log went silent after the first optimization.  Skip that
-    call, and hold geomeTRIC's loggers at WARNING so its banner and per-step
-    output do not flood the log instead.
-    """
-    loggers = [logging.getLogger(name) for name in _GEOMETRIC_LOGGERS]
-    file_config, levels = logging.config.fileConfig, [lg.level for lg in loggers]
-    logging.config.fileConfig = lambda *args, **kwargs: None
-    for lg in loggers:
-        lg.setLevel(logging.WARNING)
-    try:
-        yield
-    finally:
-        logging.config.fileConfig = file_config
-        for lg, level in zip(loggers, levels, strict=True):
-            lg.setLevel(level)
 
 
 def frequencies(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import subprocess
 import sys
@@ -403,6 +404,24 @@ class TestOptimizeEnergy:
         # so a stale mf.e_tot (== e_input) would be caught.
         assert e_input - e_opt > 1e-3
         assert e_opt < e_at_opt + 1e-6
+
+    @pytest.mark.slow
+    def test_optimize_leaves_logging_alone(self, caplog: pytest.LogCaptureFixture) -> None:
+        # geomeTRIC reconfigures logging on every run (here from PySCF's
+        # log.ini), which replaced the pipeline's handlers and printed every
+        # optimization step into its log.
+        start = Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array([[0.0, 0.0, 0.0], [0.9, 0.0, 0.0], [-0.3, 0.85, 0.0]]),
+        )
+        root = logging.getLogger()
+        with caplog.at_level(logging.INFO):
+            handlers = list(root.handlers)
+            optimize(start, 0, "pbe", "sto-3g", threads=1)
+            assert root.handlers == handlers
+            logging.getLogger("qm_pka.refinement").info("still logging")
+        assert "still logging" in caplog.text
+        assert not [r for r in caplog.records if r.name.startswith("geometric")]
 
 
 class TestEinsumPathShim:

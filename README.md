@@ -189,6 +189,7 @@ Source under `qm_pka/`. One-liner per module:
 | `sampling.py` | Approach 1 + Approach 2 |
 | `refinement.py`, `scoring.py` | Backend-agnostic stage runners |
 | `pyscf_runner.py`, `psi4_runner.py`, `orbmol_runner.py` | Backend implementations (OrbMol: refinement only) |
+| `geometric_logging.py` | Stops geomeTRIC reconfiguring the application's logging (PySCF and OrbMol optimizations) |
 | `crest_runner.py`, `xtb_runner.py` | CREST/xTB subprocess wrappers |
 | `charge_enumeration.py` | SMARTS-based BFS to enumerate charge states |
 | `rdkit_utils.py` | SMILES ↔ 3D, tautomer enumeration, protomer identity, input validation |
