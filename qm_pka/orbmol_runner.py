@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import logging.config
 import os
 import tempfile
 import uuid
 import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import cache
 from typing import Any
@@ -207,14 +210,13 @@ def optimize(
 
     def _run(start: Geometry, coordsys: str) -> tuple[Geometry, float, bool]:
         engine = _Engine(start)
-        with tempfile.TemporaryDirectory(prefix="orbmol_opt_") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="orbmol_opt_") as tmpdir, _geometric_quiet():
             try:
                 progress = geometric.optimize.run_optimizer(
                     customengine=engine,
                     input=os.path.join(tmpdir, str(uuid.uuid4())),
                     coordsys=coordsys,
                     maxiter=100,
-                    logIni=_quiet_log_ini(tmpdir),
                 )
                 xyz = np.asarray(progress.xyzs[-1], dtype=float)
                 energy = float(progress.qm_energies[-1])
@@ -235,20 +237,34 @@ def optimize(
     return _run(opt_geom, "cart")
 
 
-def _quiet_log_ini(tmpdir: str) -> str:
-    """A geomeTRIC logging config that prints nothing.
+# geomeTRIC's loggers.  Every module logs through geometric.nifty's logger, which
+# sets its own level to INFO (so a level on the "geometric" parent has no
+# effect); the other two are its fallbacks outside the package.
+_GEOMETRIC_LOGGERS = ("geometric.nifty", "NiftyLogger", "MoleculeLogger")
 
-    Its default config writes every step to stdout, which would drown the
-    pipeline log across hundreds of conformers.
+
+@contextmanager
+def _geometric_quiet() -> Iterator[None]:
+    """Run geomeTRIC without letting it touch the application's logging.
+
+    ``geometric.optimize.run_optimizer`` calls ``logging.config.fileConfig`` on
+    every optimization, which closes and removes the handlers already installed
+    (the pipeline's) and reconfigures the root logger -- with a quiet config the
+    pipeline's own log went silent after the first optimization.  Skip that
+    call, and hold geomeTRIC's loggers at WARNING so its banner and per-step
+    output do not flood the log instead.
     """
-    path = os.path.join(tmpdir, "log.ini")
-    with open(path, "w") as f:
-        f.write(
-            "[loggers]\nkeys=root\n\n[handlers]\nkeys=null\n\n[formatters]\nkeys=\n\n"
-            "[logger_root]\nlevel=WARNING\nhandlers=null\n\n"
-            "[handler_null]\nclass=NullHandler\nargs=()\n"
-        )
-    return path
+    loggers = [logging.getLogger(name) for name in _GEOMETRIC_LOGGERS]
+    file_config, levels = logging.config.fileConfig, [lg.level for lg in loggers]
+    logging.config.fileConfig = lambda *args, **kwargs: None
+    for lg in loggers:
+        lg.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        logging.config.fileConfig = file_config
+        for lg, level in zip(loggers, levels, strict=True):
+            lg.setLevel(level)
 
 
 def frequencies(

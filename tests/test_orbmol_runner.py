@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -77,6 +78,19 @@ class TestAgainstTrainingLevel:
         assert converged
         assert energy == pytest.approx(orbmol_runner.single_point(opt, 0, METHOD), abs=1e-10)
         assert energy < orbmol_runner.single_point(WATER, 0, METHOD)
+
+    def test_optimize_leaves_logging_alone(self, caplog: pytest.LogCaptureFixture) -> None:
+        # geomeTRIC reconfigures logging on every run by default; that used to
+        # remove the pipeline's handlers and silence its log after the first
+        # optimization.  Nor should geomeTRIC's per-step output leak through.
+        root = logging.getLogger()
+        with caplog.at_level(logging.INFO):
+            handlers = list(root.handlers)
+            orbmol_runner.optimize(WATER, 0, METHOD)
+            assert root.handlers == handlers
+            logging.getLogger("qm_pka.refinement").info("still logging")
+        assert "still logging" in caplog.text
+        assert not [r for r in caplog.records if r.name.startswith("geometric")]
 
     def test_frequencies(self) -> None:
         opt, _, _ = orbmol_runner.optimize(WATER, 0, METHOD)
