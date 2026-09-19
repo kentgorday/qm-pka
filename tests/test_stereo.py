@@ -18,21 +18,67 @@ class TestEnumerateStereoisomers:
         assert len(result) == 2
 
     def test_two_tetrahedral(self) -> None:
-        # Two stereocenters -> up to 4 stereoisomers
+        """Butane-2,3-diol: RS and SR are one meso compound, so 3 and not 4."""
         result = enumerate_stereoisomers("CC(O)C(O)C")
-        assert len(result) >= 3  # may be 3 if meso is present
+        assert len(result) == 3
 
     def test_ez_bond(self) -> None:
-        # 2-butene has E/Z
+        # 2-butene has E/Z, and neither is specified here
         result = enumerate_stereoisomers("CC=CC")
         assert len(result) == 2
 
     def test_combined_tetrahedral_and_ez(self) -> None:
-        # Molecule with both tetrahedral and E/Z
+        """One free centre beside a *specified* E bond: 2, not 4.
+
+        This assertion used to read `>= 2`, which passes whether the specified
+        bond is respected or re-enumerated -- so it recorded the ambiguity
+        instead of deciding it, and the defect lived behind it for five months.
+        """
         result = enumerate_stereoisomers("CC(O)/C=C/C")
-        # 1 tetrahedral x defined E -> 2 stereoisomers from tetrahedral
-        # But enumerate with onlyUnassigned=False reassigns all
-        assert len(result) >= 2
+        assert len(result) == 2
+        assert all("/C=C/" in smi for smi in result), "the E bond must survive"
+
+
+class TestSpecifiedStereoIsAnInputNotAQuestion:
+    """A configuration the caller wrote down must come back unchanged.
+
+    Enumerating it produces a *different compound* and scores it as though it
+    were the one asked about. Fumaric acid is the case that exposed this: it was
+    turned into fumaric and maleic acid at every charge state, and the maleate
+    monoanion -- stabilised by a near-symmetric internal hydrogen bond -- won the
+    energy window, so the reported pKa1 was a fumaric-to-maleate transition.
+    """
+
+    def test_a_specified_double_bond_is_not_re_enumerated(self) -> None:
+        assert enumerate_stereoisomers("O=C(O)/C=C/C(=O)O") == ["O=C(O)/C=C/C(=O)O"]
+
+    def test_the_cis_isomer_is_likewise_left_alone(self) -> None:
+        """Symmetrically: asking about maleic acid must not produce fumaric."""
+        result = enumerate_stereoisomers(r"O=C(O)/C=C\C(=O)O")
+        assert len(result) == 1
+        assert "/C=C/" not in result[0]
+
+    def test_a_specified_centre_is_not_re_enumerated(self) -> None:
+        """Proline: the spurious partner was harmless only because it is an
+        enantiomer and gets collapsed. E/Z pairs are diastereomers and do not."""
+        assert enumerate_stereoisomers("O=C(O)[C@@H]1CCCN1") == ["O=C(O)[C@@H]1CCCN1"]
+
+    def test_a_centre_created_by_protonation_is_still_enumerated(self) -> None:
+        """The case the enumeration exists for, and the reason not to over-correct.
+
+        A tertiary amine is not a stereocentre; protonating it quaternises the
+        nitrogen, which cannot invert without breaking a bond. The charge-state
+        walk writes `[NH+]` with no tag, so the centre is *unspecified in the
+        product* and both invertomers must still be generated.
+        """
+        result = enumerate_stereoisomers("CC[NH+](C)C[C@@H](C)O")
+        assert len(result) == 2, "both nitrogen invertomers"
+        assert len({smi for smi in result}) == 2
+        # ... and the carbinol centre the caller did specify is untouched.
+        assert all("[C@@H](C)O" in smi or "[C@H](C)O" in smi for smi in result)
+
+    def test_an_unspecified_centre_is_still_enumerated(self) -> None:
+        assert len(enumerate_stereoisomers("CC(N)C(=O)O")) == 2
 
 
 class TestMirrorSmiles:

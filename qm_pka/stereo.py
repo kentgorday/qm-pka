@@ -20,15 +20,34 @@ from rdkit.Chem.EnumerateStereoisomers import (
 
 
 def enumerate_stereoisomers(smiles: str) -> list[str]:
-    """Enumerate all stereoisomers (tetrahedral + E/Z) of a SMILES.
+    """Enumerate the *unspecified* stereochemistry of a SMILES.
 
-    Returns a list of unique canonical SMILES. If the molecule has no
-    stereocenters, returns a single-element list with the canonical SMILES.
+    Returns a list of unique canonical SMILES. A molecule whose stereochemistry
+    is fully specified comes back unchanged, as a single-element list.
+
+    Only unassigned centres and bonds are enumerated. A configuration the caller
+    wrote down is an input, not a question: enumerating it produces a different
+    compound and scores it as though it were the one asked about. With
+    ``onlyUnassigned=True`` this module turned fumaric acid into fumaric *and*
+    maleic acid at every charge state, and because the maleate monoanion carries
+    a near-symmetric internal hydrogen bond (O-H...O at 1.28 A) it sat
+    2.24 kcal/mol below the fumarate monoanion, took the energy window, and left
+    the trans anion discarded before refinement. The reported pKa1 was then a
+    fumaric-acid-to-maleate transition, about 1.6 units below fumaric acid's own.
+
+    This still covers the case the enumeration exists for. A tertiary amine that
+    becomes a stereocentre only once protonated is *unspecified in the product*
+    -- the charge-state walk writes ``[NH+]`` with no tag -- so both invertomers
+    are still generated. What no longer happens is re-enumerating a double bond
+    or a centre the input already pinned. Note that a spurious tetrahedral
+    isomer was harmless in practice, since `deduplicate_enantiomers` collapses
+    it; E/Z survived that collapse because E and Z are diastereomers, which is
+    why a specified double bond was the first case to show the defect.
     """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         raise ValueError(f"RDKit could not parse SMILES: {smiles}")
-    opts = StereoEnumerationOptions(onlyUnassigned=False, unique=True)
+    opts = StereoEnumerationOptions(onlyUnassigned=True, unique=True)
     isomers = list(EnumerateStereoisomers(mol, options=opts))
     result: list[str] = []
     seen: set[str] = set()
