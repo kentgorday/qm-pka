@@ -9,20 +9,19 @@
 smiles = "NCC(=O)O"
 charge_min = -1
 charge_max = 1
+solvent = "water"
 
 [sampling]
 approach = "rdkit_first"
 ewin = 6.0
 
 [refinement]
-# PySCF defaults: wB97X-3c / vDZP / SS(V)PE
-solvent = "water"
-ewin = 10.0
-rrho_method = "xtb"
+# PySCF defaults: wB97X-3c / vDZP, minimized in SS(V)PE
+ewin = 8.0
+rrho = "xtb"
 
 [scoring]
 # PySCF defaults: wB97M-V / def2-QZVPPD / SS(V)PE
-solvent = "water"
 ewin = 10.0
 
 [compute]

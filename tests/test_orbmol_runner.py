@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from qm_pka import orbmol_runner
+from qm_pka.config import RefinementConfig
 from qm_pka.refinement import _get_driver, refine
 from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
@@ -105,11 +106,16 @@ def test_refine_with_orbmol_driver() -> None:
     start = Geometry(
         WATER.symbols, WATER.coords + np.array([[0.0, 0.0, 0.05], [0.0, 0.0, 0], [0, 0, 0]])
     )
-    ms = Microstate(tautomer_id="water", conformers=[Conformer(geometry=start)], smiles="O")
+    ms = Microstate(
+        tautomer_id="[H]O[H]", conformers=[Conformer(geometry=start)], smiles="[H]O[H]"
+    )
     ensemble = Ensemble(input_smiles="O")
     ensemble.charge_states[0] = ChargeState(charge=0, microstates=[ms])
 
-    refine(ensemble, driver_name="orbmol", method=METHOD, basis="", rrho_method="dft")
+    config = RefinementConfig(
+        method=METHOD, basis="", solvation="none", rrho="refinement", engine="orbmol"
+    )
+    refine(ensemble, config, driver="pyscf")
 
     (conf,) = ensemble.charge_states[0].microstates[0].conformers
     assert conf.refinement_converged

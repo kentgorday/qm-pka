@@ -19,7 +19,7 @@ each charge state.
 | Stage | What it does | Tool | Sets |
 |---|---|---|---|
 | 1. Sampling | Enumerate tautomers, protonation states, stereoisomers, conformers | CREST + GFN2-xTB (ALPB water) | `electronic_energy`, `solvation_energy`, `rrho_correction` (xTB `--hess`), `multiplicity` |
-| 2. Refinement | Geometry optimization + RRHO recompute on the refined geometry | PySCF, Psi4 or OrbMol-v2 (+ xtb) | overwrites electronic/solvation with refinement-level values; recomputes `rrho_correction` and `multiplicity` |
+| 2. Refinement | Geometry optimization + solvation + RRHO recompute on the refined geometry | PySCF, Psi4 or OrbMol-v2 (+ xtb) | overwrites electronic/solvation with refinement-level values; recomputes `rrho_correction` and `multiplicity` |
 | 3. Scoring | High-level DFT single point | PySCF or Psi4 | overwrites electronic/solvation; leaves `rrho_correction` and `multiplicity` |
 
 After scoring, `assign_weights` populates per-conformer Boltzmann weights and
@@ -28,16 +28,27 @@ the ensemble is serialized to `ensemble.json`.
 RRHO (quasi-RRHO vibrational free energy) is always included. It is first
 computed cheaply at sampling — an xTB Hessian (`xtb --hess`, ALPB water) on the
 xTB geometry, folded into the sampling energy window so filtering ranks by free
-energy. It is then recomputed once on the refined DFT geometry, controlled by
-`refinement.rrho_method`:
+energy. It is then recomputed once on the refined geometry, controlled by
+`refinement.rrho`:
 
 - `"xtb"` (default): GFN2 single-point biased Hessian (`xtb --bhess`, ALPB
   water) — the Spicher–Grimme SPH scheme. Cheap and robust on the non-stationary
-  DFT geometry; recommended.
-- `"dft"`: Hessian from the refinement driver at the refinement level, matching
-  the refinement solvent — for `"orbmol"`, the OrbMol-v2 Hessian (despite the
-  name). More expensive and only as good as the backend's Hessians. Unsupported
-  on Psi4 with implicit solvent (no analytical PCM Hessians).
+  refined geometry; recommended.
+- `"refinement"`: a Hessian from whatever optimized the geometry, at the
+  refinement level — OrbMol-v2's own Hessian for an OrbMol refinement, the DFT
+  backend's otherwise. More expensive and only as good as that Hessian.
+
+Neither choice dominates, which is why the cheap default stands. Measured over
+38 structures (v3 molecules 1–11, lowest conformer per charge state, at OrbMol
+minima), the two error sources are the same size: moving the xTB Hessian from
+gas to ALPB shifts ΔG_RRHO by 0.62 kcal/mol sd (0.44 pKa on measured
+transitions), while swapping xTB for OrbMol in gas phase shifts it by 0.71
+kcal/mol sd. Against a wB97X-3c gas Hessian on 10 small transitions, OrbMol is
+the better *gas* Hessian by about 4x (sd 0.19 vs 0.81) — but a gas Hessian is
+the wrong ensemble, and xTB is the only one of the two that can carry the
+solvent. `rrho = "refinement"` on the Psi4 driver is allowed and warns loudly:
+Psi4 has no analytical Hessian for these functionals, so each conformer costs
+~6N gradient calculations, usually more than the optimization it follows.
 
 Scoring never recomputes RRHO; the refinement value carries through.
 
@@ -106,6 +117,22 @@ Boltzmann weights are normalized **across all conformers of all microstates
 within a charge state**, since the macroscopic pKa depends on the full
 partition function of each charge state.
 
+`Microstate.excluded_conformers` holds conformers that left the ensemble with
+their geometry and a `reason`, deliberately typed as a `Literal` so a typo is a
+type error rather than a category that silently never matches. It is **not** a
+complete record of every conformer that was dropped, and the asymmetry is on
+purpose: it holds the ones that failed (`optimization_failed`,
+`rrho_failed`, `solvation_failed`, `scoring_failed`, …), the ones whose
+*identity* turned out wrong (`fragmented`, `proton_detached`, …), and the ones
+the solvation pre-filter skipped (`gas_prefilter`) — but the energy-window
+filters themselves drop conformers without a record. A conformer outside the
+window has a complete, correct free energy and was ranked against its siblings
+on it; there is nothing to diagnose, and at a 15 kcal/mol sampling window the
+records would outnumber the ensemble. A conformer skipped by the pre-filter is
+different in kind: it was dropped on a *cost* decision, using an energy missing
+the solvation term, so the record is what lets a finished run be checked for
+near misses rather than taken on faith.
+
 ## Two sampling approaches
 
 Configured via `sampling.approach`:
@@ -126,34 +153,96 @@ physics-based site detection rather than SMARTS rules.
 
 ## QM backends
 
-Configured via `compute.driver`, which runs both QM stages unless
-`refinement.driver` names a different one for refinement. All drivers implement
-the same three operations (`single_point`, `optimize`, `frequencies`) with the
-same signature, so `refinement.py` and `scoring.py` are backend-agnostic.
+`compute.driver` is the DFT backend for the whole run: all of scoring, and any
+DFT in refinement. It is `"psi4"` or `"pyscf"` — never `"orbmol"`, which cannot
+score. All three drivers implement the same three operations (`single_point`,
+`optimize`, `frequencies`) with the same signature, so `refinement.py` and
+`scoring.py` are backend-agnostic.
 
 - **`"pyscf"` (default).** In-process Python library. Supports analytical PCM
-  gradients (SS(V)PE, IEF-PCM, C-PCM) and SMD. Default refinement
-  `wB97X-3c/vDZP/SS(V)PE`; default scoring `wB97M-V/def2-QZVPPD/SS(V)PE`.
+  gradients (SS(V)PE, IEF-PCM, C-PCM) and SMD, so it is the only backend that
+  can *minimize* in implicit solvent. Of the 3c composites it implements only
+  wB97X-3c.
 - **`"psi4"`.** Subprocess driver, writes input decks and parses output.
-  **No analytical PCM gradients** — `config.load_config` warns if you
-  request `psi4` + solvent in `[refinement]`. Use gas-phase refinement with
-  Psi4, or switch to PySCF.
-- **`"orbmol"` (refinement only).** The OrbMol-v2 machine-learned potential
-  (orb-models; Apache-2.0 code and weights), trained on gas-phase
+  **No analytical PCM gradients**, so `refinement.solvation = "optimize"` is
+  refused; it minimizes in gas phase and adds one PCM single point on that
+  geometry. Offers all five 3c composites (wB97X-3c, r2SCAN-3c, B97-3c,
+  PBEh-3c, HF-3c).
+- **OrbMol-v2 (refinement only).** The machine-learned potential from
+  orb-models (Apache-2.0 code and weights), trained on gas-phase
   wB97M-V/def2-TZVPD data (OMol25 + OPoly26), with total charge and spin as
-  inputs. Set `refinement.driver = "orbmol"`; `method` defaults to
-  `"OrbMol-v2"` and there is no basis. It has **no implicit solvent**, so it is
-  gas-phase only and cannot score — `config.load_config` rejects it as
-  `compute.driver` and rejects a refinement `solvent_model`. Measured against
-  wB97M-V (807 training-set structures; 29 geometry pairs): conformer/tautomer
-  energies within a charge state MAE 0.11 kcal/mol (wB97X-3c: 0.31), gas-phase
-  deprotonation energies MAE 0.14 kcal/mol vs def2-TZVPD, and its minima are
-  lower in wB97M-V energy than wB97X-3c's in 29/29 cases. Dianions are weaker.
-  CPU only, about 1 GB of RAM, seconds per optimization. See
-  `examples/glycine_orbmol.toml`.
+  inputs. Selected by naming it as the refinement *method*
+  (`[refinement] method = "OrbMol-v2"`); `compute.driver` stays psi4 or pyscf
+  and still runs the solvation single point and scoring. There is no basis. It
+  has **no implicit solvent**, so `solvation = "optimize"` is refused. Measured
+  against wB97M-V (807 training-set structures; 29 geometry pairs):
+  conformer/tautomer energies within a charge state MAE 0.11 kcal/mol
+  (wB97X-3c: 0.31), gas-phase deprotonation energies MAE 0.14 kcal/mol vs
+  def2-TZVPD, and its minima are lower in wB97M-V energy than wB97X-3c's in
+  29/29 cases. Dianions are weaker. CPU only, about 1 GB of RAM, seconds per
+  optimization. See `examples/glycine_orbmol.toml`.
 
 DFT integration grids are hardcoded: (99, 590) for the SCF grid, (50, 194)
 for the VV10 NLC grid. These aren't user-tunable on purpose.
+
+## Configuration
+
+One TOML file, five sections (`[molecule]`, `[sampling]`, `[refinement]`,
+`[scoring]`, `[compute]`), loaded by `config.load_config`. The config says
+which *physics* goes into each energy term; the runners decide how to get it
+(analytic vs finite-difference Hessians, grids, cavity construction).
+
+A top-level `protocol` key fills in every level of theory and window at once;
+anything written in the file wins over the preset.
+
+| | `high_quality` | `fast` |
+|---|---|---|
+| sampling `ewin` | 10 | 15 |
+| refinement | wB97X-3c/vDZP | OrbMol-v2 |
+| refinement solvation | driver's best (see below) | wB97X-3c/vDZP single point |
+| refinement `ewin` | 8 | 6 |
+| scoring | wB97M-V/def2-QZVPPD | wB97M-V/def2-TZVPPD |
+| cost (40-molecule training set) | ~74 d | ~15–21 d |
+
+`fast` agrees with `high_quality` to ~0.05 pKa at the scoring level and ≤0.01
+pKa on the refinement window, on training-set molecules. The basis step
+QZVPPD → TZVPPD is nearly free (offset −0.20, scatter 0.08 kcal/mol over 22
+transitions); `high_quality` keeps QZVPPD because that is what wB97M-V's
+authors recommend. Dropping VV10 is *not* free — wB97X-D3BJ scatters 0.74
+kcal/mol (0.39 pKa) — which is why neither protocol does.
+
+**Solvation at refinement** (`refinement.solvation`) is the setting that
+matters most for the window, because the refinement filter decides what scoring
+ever sees:
+
+- `"optimize"` — minimize in implicit solvent. PySCF only; the default there.
+- `"single_point"` — minimize in gas phase, then one solvated single point on
+  that geometry. The default on Psi4 and for OrbMol. For DFT this is one extra
+  job, since the optimizer already produced the gas-phase energy; for OrbMol it
+  is a DFT pair (solvated and gas) at `solvation_method`/`solvation_basis`,
+  which default to wB97X-3c/vDZP.
+- `"none"` — gas phase. Warns when scoring is solvated, because gas and
+  solvated rankings genuinely differ: a 4 kcal/mol gas window cost 3.3 pKa in
+  testing, and conformers inside a 6 kcal/mol *solvated* window sat up to 9.1
+  kcal/mol above the gas-phase minimum.
+
+With solvation in the filter, refinement ranks the way scoring does (Spearman
+1.00 against a scoring-level reference) and a 6 kcal/mol window keeps 95% of
+the scored set at 0 pKa cost.
+
+`refinement.solvation_prefilter_ewin` is an optional cost control for that
+single point: conformers already this far above the charge state's gas-phase
+minimum are skipped. It is off unless set, must exceed `ewin`, and warns if it
+is within 4 kcal/mol of it. It matters for OrbMol, where optimization takes
+seconds and the DFT pair dominates; for DFT refinement the single point is
+~10% of one optimization at the same level, and the config says so.
+
+The `3c` composites are a functional *and* the basis they were parameterized
+with, so `config.load_config` supplies the basis and refuses any other pairing
+(`wB97X-3c` with def2-TZVP is a different method, not wB97X-3c).
+
+`config.provenance()` records what each stage computed; `pipeline.py` writes it
+into `ensemble.settings` so a checkpoint on disk says which level produced it.
 
 ## Quickstart
 
@@ -175,7 +264,7 @@ Example configs in `examples/` cover both DFT backends, OrbMol-v2 refinement,
 and both sampling approaches; each TOML is annotated.
 
 For batch runs over a CSV of SMILES, see `scripts/run_training_set.py`
-(supports `--resume`).
+(`--protocol`, `--driver`, `--resume`).
 
 ## Repo layout
 

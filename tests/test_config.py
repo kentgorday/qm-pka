@@ -30,6 +30,7 @@ class TestMinimalConfig:
         )
         assert cfg.molecule.smiles == "CCO"
         assert cfg.molecule.charge_range == (-1, 0)
+        assert cfg.molecule.solvent == "water"
 
     def test_missing_molecule_raises(self, tmp_toml: Callable[[str], Path]) -> None:
         with pytest.raises(ValueError, match="must have a \\[molecule\\]"):
@@ -70,56 +71,49 @@ class TestChargeRange:
 
 
 class TestDriverDefaults:
-    def test_pyscf_defaults_with_solvent(self, tmp_toml: Callable[[str], Path]) -> None:
+    def test_pyscf_minimizes_in_solvent(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""
             [molecule]
             smiles = "CCO"
-            [refinement]
-            solvent = "water"
-            [scoring]
-            solvent = "water"
             [compute]
             driver = "pyscf"
         """)
         )
-        assert cfg.refinement.method == "wB97X-3c"
-        assert cfg.refinement.basis == "vDZP"
-        assert cfg.refinement.solvent_model == "SSVPE"
-        assert cfg.scoring.method == "wB97M-V"
-        assert cfg.scoring.basis == "def2-QZVPPD"
+        assert (cfg.refinement.method, cfg.refinement.basis) == ("wB97X-3c", "vDZP")
+        assert cfg.refinement.engine == "pyscf"
+        # PySCF has analytical PCM gradients, so the cheapest way to a solvated
+        # refinement energy is to minimize in solvent outright.
+        assert cfg.refinement.solvation == "optimize"
+        assert (cfg.scoring.method, cfg.scoring.basis) == ("wB97M-V", "def2-QZVPPD")
         assert cfg.scoring.solvent_model == "SSVPE"
 
-    def test_pyscf_defaults_gas_phase(self, tmp_toml: Callable[[str], Path]) -> None:
+    def test_psi4_adds_a_single_point_instead(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""
             [molecule]
             smiles = "CCO"
-            [compute]
-            driver = "pyscf"
-        """)
-        )
-        assert cfg.refinement.method == "wB97X-3c"
-        assert cfg.refinement.basis == "vDZP"
-        assert cfg.refinement.solvent_model is None
-        assert cfg.scoring.solvent_model is None
-
-    def test_psi4_defaults(self, tmp_toml: Callable[[str], Path]) -> None:
-        cfg = load_config(
-            tmp_toml("""
-            [molecule]
-            smiles = "CCO"
-            [scoring]
-            solvent = "water"
             [compute]
             driver = "psi4"
         """)
         )
-        assert cfg.refinement.method == "wB97X-3c"
-        assert cfg.refinement.basis == "vDZP"
-        assert cfg.refinement.solvent_model is None
-        assert cfg.scoring.method == "wB97M-V"
+        assert cfg.refinement.solvation == "single_point"
         assert cfg.scoring.solvent_model == "IEFPCM"
+
+    def test_gas_phase_scoring_makes_refinement_gas_phase(
+        self, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [scoring]
+            solvent_model = "none"
+        """)
+        )
+        assert cfg.scoring.solvent_model is None
+        assert cfg.refinement.solvation == "none"
+        assert cfg.refinement.ewin == 10.0  # wider, because gas rankings rerank
 
     def test_unknown_driver_raises(self, tmp_toml: Callable[[str], Path]) -> None:
         with pytest.raises(ValueError, match="Unknown driver"):
@@ -132,137 +126,143 @@ class TestDriverDefaults:
             """)
             )
 
-
-class TestDriverOverrides:
-    def test_override_refinement_method(self, tmp_toml: Callable[[str], Path]) -> None:
-        cfg = load_config(
-            tmp_toml("""
-            [molecule]
-            smiles = "CCO"
-            [refinement]
-            method = "B3LYP"
-            basis = "6-31G*"
-            solvent_model = "SMD"
-            solvent = "water"
-            [compute]
-            driver = "pyscf"
-        """)
-        )
-        assert cfg.refinement.method == "B3LYP"
-        assert cfg.refinement.basis == "6-31G*"
-
-    def test_override_scoring(self, tmp_toml: Callable[[str], Path]) -> None:
-        cfg = load_config(
-            tmp_toml("""
-            [molecule]
-            smiles = "CCO"
-            [scoring]
-            method = "B2PLYP"
-            basis = "def2-TZVPP"
-            solvent_model = "SMD"
-            solvent = "water"
-            [compute]
-            driver = "pyscf"
-        """)
-        )
-        assert cfg.scoring.method == "B2PLYP"
-        assert cfg.scoring.basis == "def2-TZVPP"
-
-
-class TestSolventValidation:
-    def test_solvent_model_without_solvent_raises(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match=r"solvent_model.*but no solvent"):
-            load_config(
-                tmp_toml("""
-                [molecule]
-                smiles = "CCO"
-                [refinement]
-                solvent_model = "SMD"
-            """)
-            )
-
-    def test_scoring_solvent_model_without_solvent_raises(
+    def test_solvent_model_not_on_this_driver_raises(
         self, tmp_toml: Callable[[str], Path]
     ) -> None:
-        with pytest.raises(ValueError, match=r"solvent_model.*but no solvent"):
+        with pytest.raises(ValueError, match="not available on the psi4 driver"):
             load_config(
                 tmp_toml("""
                 [molecule]
                 smiles = "CCO"
                 [scoring]
-                solvent_model = "IEFPCM"
-            """)
-            )
-
-    def test_psi4_refinement_solvent_warns(
-        self,
-        tmp_toml: Callable[[str], Path],
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        with caplog.at_level(logging.WARNING):
-            load_config(
-                tmp_toml("""
-                [molecule]
-                smiles = "CCO"
-                [refinement]
-                solvent_model = "IEFPCM"
-                solvent = "water"
+                solvent_model = "SMD"
                 [compute]
                 driver = "psi4"
             """)
             )
-        assert "no analytical gradients" in caplog.text
 
 
-class TestRefinementDriver:
-    def test_defaults_to_compute_driver(self, tmp_toml: Callable[[str], Path]) -> None:
+class TestProtocols:
+    def test_fast(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""
+            protocol = "fast"
             [molecule]
             smiles = "CCO"
-            [compute]
-            driver = "psi4"
         """)
         )
-        assert cfg.refinement.driver == "psi4"
+        assert cfg.sampling.ewin == 15.0
+        assert cfg.refinement.engine == "orbmol"
+        assert cfg.refinement.method == "OrbMol-v2"
+        assert cfg.refinement.solvation == "single_point"
+        assert (cfg.refinement.solvation_method, cfg.refinement.solvation_basis) == (
+            "wB97X-3c",
+            "vDZP",
+        )
+        assert cfg.refinement.solvation_prefilter_ewin == 12.0
+        assert cfg.refinement.ewin == 6.0
+        assert (cfg.scoring.method, cfg.scoring.basis) == ("wB97M-V", "def2-TZVPPD")
 
-    def test_orbmol_refinement_with_dft_scoring(self, tmp_toml: Callable[[str], Path]) -> None:
+    def test_high_quality(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            protocol = "high_quality"
+            [molecule]
+            smiles = "CCO"
+        """)
+        )
+        assert cfg.sampling.ewin == 10.0
+        assert (cfg.refinement.method, cfg.refinement.basis) == ("wB97X-3c", "vDZP")
+        assert cfg.refinement.ewin == 8.0
+        assert (cfg.scoring.method, cfg.scoring.basis) == ("wB97M-V", "def2-QZVPPD")
+
+    def test_file_overrides_preset(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            protocol = "fast"
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            ewin = 4.0
+            solvation_prefilter_ewin = 14.0
+        """)
+        )
+        assert cfg.refinement.ewin == 4.0
+        assert cfg.refinement.solvation_prefilter_ewin == 14.0
+        assert cfg.refinement.method == "OrbMol-v2"  # still the preset's
+
+    def test_unknown_protocol_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="Unknown protocol"):
+            load_config(
+                tmp_toml("""
+                protocol = "cheapest"
+                [molecule]
+                smiles = "CCO"
+            """)
+            )
+
+    def test_provenance_records_what_each_stage_computed(
+        self, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            protocol = "fast"
+            [molecule]
+            smiles = "CCO"
+        """)
+        )
+        prov = cfg.provenance()
+        assert prov["protocol"] == "fast"
+        assert prov["refinement"]["engine"] == "orbmol"
+        # The solvation level is the DFT pair's, not OrbMol's.
+        assert prov["refinement"]["solvation"] == {
+            "mode": "single_point",
+            "level": "wB97X-3c/vDZP",
+            "model": "SSVPE",
+            "driver": "pyscf",
+        }
+        assert prov["scoring"]["basis"] == "def2-TZVPPD"
+
+
+class TestOrbmolRefinement:
+    def test_selected_by_method(self, tmp_toml: Callable[[str], Path]) -> None:
+        # The method names the engine: [compute] driver stays the DFT backend,
+        # because it still runs the solvation single point and all of scoring.
         cfg = load_config(
             tmp_toml("""
             [molecule]
             smiles = "CCO"
             [refinement]
-            driver = "orbmol"
-            [scoring]
-            solvent = "water"
+            method = "OrbMol-v2"
             [compute]
             driver = "pyscf"
         """)
         )
-        assert cfg.refinement.driver == "orbmol"
-        assert (cfg.refinement.method, cfg.refinement.basis) == ("OrbMol-v2", "")
-        assert cfg.refinement.solvent_model is None
-        # Scoring keeps the [compute] driver's defaults.
+        assert cfg.refinement.engine == "orbmol"
+        assert cfg.refinement.basis == ""
         assert cfg.compute.driver == "pyscf"
-        assert (cfg.scoring.method, cfg.scoring.solvent_model) == ("wB97M-V", "SSVPE")
+        assert cfg.refinement.solvation == "single_point"
+        assert cfg.refinement.solvation_method == "wB97X-3c"
 
-    def test_psi4_refinement_under_pyscf_scoring(self, tmp_toml: Callable[[str], Path]) -> None:
-        # Defaults and validation follow the refinement driver, not [compute].
+    def test_solvation_level_is_configurable(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""
             [molecule]
             smiles = "CCO"
             [refinement]
-            driver = "psi4"
-            solvent = "water"
+            method = "OrbMol-v2"
+            solvation_method = "r2SCAN-3c"
             [compute]
-            driver = "pyscf"
+            driver = "psi4"
         """)
         )
-        assert cfg.refinement.solvent_model is None  # psi4 refines gas-phase by default
+        assert (cfg.refinement.solvation_method, cfg.refinement.solvation_basis) == (
+            "r2SCAN-3c",
+            "def2-mTZVPP",
+        )
 
-    def test_orbmol_cannot_score(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match=r"\[refinement\] driver = 'orbmol'"):
+    def test_cannot_score(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match=r"\[compute\] driver = 'orbmol'"):
             load_config(
                 tmp_toml("""
                 [molecule]
@@ -272,34 +272,87 @@ class TestRefinementDriver:
             """)
             )
 
-    def test_unknown_refinement_driver_raises(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match=r"Unknown \[refinement\] driver"):
-            load_config(
-                tmp_toml("""
-                [molecule]
-                smiles = "CCO"
-                [refinement]
-                driver = "gaussian"
-            """)
-            )
-
-    def test_orbmol_solvent_model_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+    def test_cannot_minimize_in_solvent(self, tmp_toml: Callable[[str], Path]) -> None:
         with pytest.raises(ValueError, match="gas-phase potential"):
             load_config(
                 tmp_toml("""
                 [molecule]
                 smiles = "CCO"
                 [refinement]
-                driver = "orbmol"
-                solvent_model = "SSVPE"
-                solvent = "water"
+                method = "OrbMol-v2"
+                solvation = "optimize"
             """)
             )
 
-    def test_orbmol_solvent_alone_warns(
-        self,
-        tmp_toml: Callable[[str], Path],
-        caplog: pytest.LogCaptureFixture,
+    def test_basis_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="no meaning for an OrbMol model"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                method = "OrbMol-v2"
+                basis = "def2-SVP"
+            """)
+            )
+
+    def test_own_hessian_accepted(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            method = "OrbMol-v2"
+            rrho = "refinement"
+        """)
+        )
+        assert cfg.refinement.rrho == "refinement"
+
+
+class TestSolvationValidation:
+    def test_solvation_method_rejected_for_dft(self, tmp_toml: Callable[[str], Path]) -> None:
+        # DFT refinement takes its single point at the refinement level, reusing
+        # the optimizer's gas energy; a second level would just be waste.
+        with pytest.raises(ValueError, match="apply only to an OrbMol refinement"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                solvation_method = "wB97X-3c"
+            """)
+            )
+
+    def test_psi4_cannot_minimize_in_solvent(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="no analytical PCM gradients"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                solvation = "optimize"
+                [compute]
+                driver = "psi4"
+            """)
+            )
+
+    def test_solvated_refinement_with_gas_scoring_raises(
+        self, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        with pytest.raises(ValueError, match="different physics from scoring"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                solvation = "single_point"
+                [scoring]
+                solvent_model = "none"
+            """)
+            )
+
+    def test_gas_refinement_with_solvated_scoring_warns(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.WARNING):
             cfg = load_config(
@@ -307,49 +360,157 @@ class TestRefinementDriver:
                 [molecule]
                 smiles = "CCO"
                 [refinement]
-                driver = "orbmol"
-                solvent = "water"
+                solvation = "none"
             """)
             )
-        assert cfg.refinement.solvent_model is None
-        assert "ignored by the orbmol driver" in caplog.text
+        assert cfg.refinement.solvation == "none"
+        assert "rerank against scoring" in caplog.text
 
-    def test_orbmol_basis_raises(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match="no meaning for the orbmol driver"):
+    def test_unknown_solvation_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match=r"Unknown \[refinement\] solvation"):
             load_config(
                 tmp_toml("""
                 [molecule]
                 smiles = "CCO"
                 [refinement]
-                driver = "orbmol"
-                basis = "def2-SVP"
+                solvation = "implicit"
             """)
             )
 
-    def test_orbmol_unknown_model_raises(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match="not an OrbMol model"):
+
+class TestSolvationPrefilter:
+    def test_accepted_below_the_window(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            protocol = "fast"
+            [molecule]
+            smiles = "CCO"
+        """)
+        )
+        assert cfg.refinement.solvation_prefilter_ewin == 12.0
+
+    def test_needs_a_solvation_single_point(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="only applies to solvation = 'single_point'"):
             load_config(
                 tmp_toml("""
                 [molecule]
                 smiles = "CCO"
                 [refinement]
-                driver = "orbmol"
-                method = "wB97X-3c"
+                solvation_prefilter_ewin = 12.0
+                [compute]
+                driver = "pyscf"
             """)
             )
 
-    def test_orbmol_dft_rrho_accepted(self, tmp_toml: Callable[[str], Path]) -> None:
-        # "dft" means the refinement driver's own Hessian -- here OrbMol-v2's.
+    def test_inside_the_window_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="must exceed ewin"):
+            load_config(
+                tmp_toml("""
+                protocol = "fast"
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                ewin = 6.0
+                solvation_prefilter_ewin = 5.0
+            """)
+            )
+
+    def test_narrow_margin_warns(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            load_config(
+                tmp_toml("""
+                protocol = "fast"
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                ewin = 6.0
+                solvation_prefilter_ewin = 7.0
+            """)
+            )
+        assert "9.1 kcal/mol above the gas-phase minimum" in caplog.text
+
+    def test_pointless_for_dft_warns(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                solvation = "single_point"
+                solvation_prefilter_ewin = 14.0
+                [compute]
+                driver = "psi4"
+            """)
+            )
+        assert "saves little" in caplog.text
+
+
+class TestCompositeMethods:
+    def test_basis_is_implied(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""
             [molecule]
             smiles = "CCO"
             [refinement]
-            driver = "orbmol"
-            rrho_method = "dft"
+            method = "r2SCAN-3c"
+            [compute]
+            driver = "psi4"
         """)
         )
-        assert cfg.refinement.rrho_method == "dft"
+        assert cfg.refinement.basis == "def2-mTZVPP"
+
+    def test_matching_basis_accepted(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            method = "wB97X-3c"
+            basis = "vdzp"
+        """)
+        )
+        assert cfg.refinement.basis == "vdzp"
+
+    def test_other_basis_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="parameterized with vDZP"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                method = "wB97X-3c"
+                basis = "def2-TZVP"
+            """)
+            )
+
+    def test_pyscf_has_only_wb97x_3c(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="not available on the pyscf driver"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                method = "r2SCAN-3c"
+                [compute]
+                driver = "pyscf"
+            """)
+            )
+
+    def test_plain_functional_keeps_its_basis(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            method = "B3LYP"
+            basis = "6-31G*"
+        """)
+        )
+        assert (cfg.refinement.method, cfg.refinement.basis) == ("B3LYP", "6-31G*")
 
 
 class TestSamplingConfig:
@@ -388,7 +549,7 @@ class TestSamplingConfig:
             )
 
 
-class TestRRHOMethod:
+class TestRrho:
     def test_default_is_xtb(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""
@@ -396,63 +557,157 @@ class TestRRHOMethod:
             smiles = "CCO"
         """)
         )
-        assert cfg.refinement.rrho_method == "xtb"
+        assert cfg.refinement.rrho == "xtb"
 
-    def test_dft_accepted(self, tmp_toml: Callable[[str], Path]) -> None:
-        cfg = load_config(
-            tmp_toml("""
-            [molecule]
-            smiles = "CCO"
-            [refinement]
-            rrho_method = "dft"
-        """)
-        )
-        assert cfg.refinement.rrho_method == "dft"
-
-    def test_invalid_rrho_method_raises(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match="Unknown rrho_method"):
+    def test_invalid_raises(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match=r"Unknown \[refinement\] rrho"):
             load_config(
                 tmp_toml("""
                 [molecule]
                 smiles = "CCO"
                 [refinement]
-                rrho_method = "cheap"
+                rrho = "cheap"
             """)
             )
 
-    def test_dft_rrho_psi4_solvent_raises(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match="rrho_method = 'dft'"):
+    def test_psi4_hessians_warn(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Allowed, but a finite-difference Hessian per conformer dwarfs the
+        # optimization it follows.
+        with caplog.at_level(logging.WARNING):
+            cfg = load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                rrho = "refinement"
+                [compute]
+                driver = "psi4"
+            """)
+            )
+        assert cfg.refinement.rrho == "refinement"
+        assert "finite-difference" in caplog.text
+
+
+class TestDeprecatedSpellings:
+    def test_refinement_driver_orbmol(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            cfg = load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                driver = "orbmol"
+            """)
+            )
+        assert cfg.refinement.method == "OrbMol-v2"
+        assert cfg.refinement.engine == "orbmol"
+        assert "[refinement] driver is deprecated" in caplog.text
+
+    def test_refinement_driver_disagreeing_with_compute_raises(
+        self, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        with pytest.raises(ValueError, match="no longer selects a DFT backend"):
             load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                driver = "psi4"
+                [compute]
+                driver = "pyscf"
+            """)
+            )
+
+    def test_rrho_method_dft(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            cfg = load_config(
                 tmp_toml("""
                 [molecule]
                 smiles = "CCO"
                 [refinement]
                 rrho_method = "dft"
-                solvent_model = "IEFPCM"
-                solvent = "water"
+            """)
+            )
+        assert cfg.refinement.rrho == "refinement"
+        assert "rrho_method = 'dft' is deprecated" in caplog.text
+
+    def test_refinement_solvent_model(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            cfg = load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                solvent_model = "SSVPE"
                 [compute]
-                driver = "psi4"
+                driver = "pyscf"
+            """)
+            )
+        assert cfg.refinement.solvation == "optimize"
+        assert cfg.scoring.solvent_model == "SSVPE"
+        assert "[refinement] solvent_model = 'SSVPE' is deprecated" in caplog.text
+
+    def test_per_stage_solvent_moves_to_molecule(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            cfg = load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [refinement]
+                solvent = "methanol"
+                [scoring]
+                solvent = "methanol"
+            """)
+            )
+        assert cfg.molecule.solvent == "methanol"
+        assert "[refinement] solvent is deprecated" in caplog.text
+
+    def test_conflicting_solvents_raise(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="a run has one solvent"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                solvent = "water"
+                [scoring]
+                solvent = "methanol"
             """)
             )
 
 
 class TestExampleConfigs:
-    def test_glycine_pyscf(self) -> None:
-        cfg = load_config(Path("examples/glycine_pyscf.toml"))
-        assert cfg.molecule.smiles == "NCC(=O)O"
-        assert cfg.compute.driver == "pyscf"
-        assert cfg.refinement.solvent_model == "SSVPE"
+    @pytest.mark.parametrize(
+        "name,driver,engine,solvation",
+        [
+            ("glycine_pyscf", "pyscf", "pyscf", "optimize"),
+            ("glycine_psi4", "psi4", "psi4", "single_point"),
+            ("glycine_orbmol", "pyscf", "orbmol", "single_point"),
+            ("aminobutanol_crest_pyscf", "pyscf", "pyscf", "optimize"),
+            ("aminobutanol_crest_psi4", "psi4", "psi4", "single_point"),
+            ("aminobutanol_rdkit_pyscf", "pyscf", "pyscf", "optimize"),
+            ("aminobutanol_rdkit_psi4", "psi4", "psi4", "single_point"),
+        ],
+    )
+    def test_loads(self, name: str, driver: str, engine: str, solvation: str) -> None:
+        cfg = load_config(Path(f"examples/{name}.toml"))
+        assert cfg.compute.driver == driver
+        assert cfg.refinement.engine == engine
+        assert cfg.refinement.solvation == solvation
 
-    def test_glycine_psi4(self) -> None:
-        cfg = load_config(Path("examples/glycine_psi4.toml"))
-        assert cfg.molecule.smiles == "NCC(=O)O"
-        assert cfg.compute.driver == "psi4"
-        assert cfg.refinement.solvent_model is None
-
-    def test_glycine_orbmol(self) -> None:
-        cfg = load_config(Path("examples/glycine_orbmol.toml"))
-        assert cfg.molecule.smiles == "NCC(=O)O"
-        assert cfg.refinement.driver == "orbmol"
-        assert cfg.refinement.solvent_model is None
-        assert cfg.compute.driver == "pyscf"
-        assert cfg.scoring.solvent_model == "SSVPE"
+    def test_examples_use_current_spellings(self, caplog: pytest.LogCaptureFixture) -> None:
+        # The deprecation shims exist for configs already on disk, not for the
+        # examples people copy from.
+        with caplog.at_level(logging.WARNING):
+            for path in sorted(Path("examples").glob("*.toml")):
+                load_config(path)
+        assert "deprecated" not in caplog.text

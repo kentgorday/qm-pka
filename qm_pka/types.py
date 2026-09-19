@@ -102,8 +102,15 @@ ExclusionReason = Literal[
     "optimization_failed",  # the optimizer itself raised (SCF non-convergence, faults)
     "gas_phase_sp_failed",  # optimization succeeded; the gas-phase decomposition point did not
     "rrho_failed",
+    "solvation_failed",  # optimization and RRHO succeeded; the solvation single point did not
     "scoring_failed",
-    # The three below differ in kind from the four above: the energy computed
+    # Not a failure: the refinement solvation single point was skipped because the
+    # conformer was already far above the charge state's minimum in gas phase (see
+    # [refinement] solvation_prefilter_ewin).  Recorded because it is a cost
+    # decision rather than a physical one; the energy-window filters themselves
+    # drop conformers without a record.
+    "gas_prefilter",
+    # The five below differ in kind from everything above: the energy computed
     # fine, and it is the *label* that is wrong.  See qm_pka.protomer_geometry.
     "fragmented",  # the heavy-atom framework came apart; the energy is a complex's
     "proton_detached",  # a hydrogen left the molecule; the energy is a fragment's

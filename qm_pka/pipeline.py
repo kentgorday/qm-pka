@@ -67,9 +67,10 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
 
     Stage 1 (Sampling): CREST-based conformer/tautomer/protonation enumeration,
         with an xTB-level RRHO correction folded into the energy filter.
-    Stage 2 (Refinement): geometry optimization with the refinement driver (DFT,
-        or the OrbMol-v2 potential) + RRHO recompute on that geometry (xtb
-        --bhess or the refinement driver's Hessian, per rrho_method).
+    Stage 2 (Refinement): geometry optimization at the refinement level (DFT, or
+        the OrbMol-v2 potential), a solvation energy per [refinement] solvation,
+        and an RRHO recompute on that geometry (xtb --bhess or a Hessian from
+        whatever optimized it, per [refinement] rrho).
     Stage 3 (Scoring): DFT single-point energy (RRHO carried over unchanged).
 
     With resume=True, any stage whose ensemble.json is already on disk is
@@ -83,9 +84,11 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
     """
     output_dir = Path(config.compute.output_dir)
 
-    # Aqueous solvent used for xTB (ALPB) throughout: conformer sampling and the
-    # xtb-level RRHO at both sampling and refinement.
-    solvent = "water"
+    # One solvent for the whole run: xTB's ALPB during sampling and xtb-level
+    # RRHO, and the implicit-solvent model at refinement and scoring.  A run
+    # that mixed them would filter on one solvent and score in another.
+    solvent = config.molecule.solvent
+    provenance = config.provenance()
 
     resumed_from: str | None = None
     ensemble: Ensemble | None = None
@@ -139,21 +142,20 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
         log.info("=== Stage 2: Refinement (skipped, reusing checkpoint) ===")
     else:
         log.info("=== Stage 2: Refinement ===")
-        ref = config.refinement
         refine(
             ensemble,
-            driver_name=ref.driver,
-            method=ref.method,
-            basis=ref.basis,
-            solvent_model=ref.solvent_model,
-            solvent=ref.solvent,
-            ewin=ref.ewin,
-            pcm_hydrogen_radius=ref.pcm_hydrogen_radius,
-            rrho_method=ref.rrho_method,
-            xtb_rrho_solvent=solvent,
+            config.refinement,
+            driver=config.compute.driver,
+            solvent=solvent,
+            solvent_model=config.scoring.solvent_model,
             threads=threads,
             memory_gb=memory_gb,
         )
+        # What this stage's energies actually are.  Sampling's settings say
+        # nothing about the refinement level, so a checkpoint on disk used to be
+        # unreadable without the config that produced it.
+        ensemble.settings["protocol"] = provenance["protocol"]
+        ensemble.settings["refinement"] = provenance["refinement"]
         serialize_ensemble(ensemble, output_dir / "refinement")
 
     # Stage 3: Scoring
@@ -165,12 +167,13 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
         method=sc.method,
         basis=sc.basis,
         solvent_model=sc.solvent_model,
-        solvent=sc.solvent,
+        solvent=solvent,
         ewin=sc.ewin,
         pcm_hydrogen_radius=sc.pcm_hydrogen_radius,
         threads=threads,
         memory_gb=memory_gb,
     )
+    ensemble.settings["scoring"] = provenance["scoring"]
 
     # Final: assign Boltzmann weights
     assign_weights(ensemble)

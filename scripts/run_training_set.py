@@ -12,7 +12,7 @@ Usage:
     pixi run python scripts/run_training_set.py \
         --training-set training_set.csv \
         --output-root training_set_output \
-        --driver pyscf --threads 8
+        --driver pyscf --threads 8 --protocol high_quality
 
 Resume after interruption:
     pixi run python scripts/run_training_set.py --resume ...
@@ -37,7 +37,7 @@ import sys
 import traceback
 from pathlib import Path
 
-from qm_pka.config import DEFAULT_MEMORY_GB, load_config
+from qm_pka.config import DEFAULT_MEMORY_GB, PROTOCOLS, load_config
 from qm_pka.pipeline import run_pipeline
 from qm_pka.training_set import compound_dir_name, find_compound_dir
 
@@ -48,42 +48,29 @@ def make_toml(
     driver: str,
     threads: int,
     memory_gb: float,
-    refinement_driver: str | None = None,
+    protocol: str = "high_quality",
 ) -> str:
     """Build a TOML config string for one molecule.
 
     Charge range is hardcoded to [-2, +2]. Empty charge states (e.g. when
     the molecule cannot reach -2) flow through harmlessly.
 
-    ``driver`` scores, and refines unless ``refinement_driver`` names another
-    ("orbmol" can only refine). Refinement-stage solvent is only emitted for
-    PySCF, which has analytical PCM gradients. Psi4 stays gas-phase at
-    refinement (implicit solvent there would fall back to finite-difference
-    gradients and be impractically slow), and OrbMol-v2 has no implicit solvent.
-    Scoring is a single point, so implicit solvent is fine on either backend.
+    ``protocol`` picks every level of theory and energy window (see PROTOCOLS in
+    qm_pka/config.py); ``driver`` runs the DFT -- scoring always, and refinement
+    too unless the protocol refines with OrbMol.  Solvation is the protocol's
+    business rather than this script's: it knows that PySCF can minimize in
+    implicit solvent and Psi4 cannot, and that OrbMol has no implicit solvent
+    and needs a separate single point.
     """
     safe_smi = smi.replace('"', '\\"')
-    ref_driver = refinement_driver or driver
-    refinement_solvent = 'solvent = "water"\n' if ref_driver == "pyscf" else ""
-    if ref_driver != driver:
-        refinement_solvent = f'driver = "{ref_driver}"\n' + refinement_solvent
     return f'''\
+protocol = "{protocol}"
+
 [molecule]
 smiles = "{safe_smi}"
 charge_min = -2
 charge_max = 2
-
-[sampling]
-approach = "rdkit_first"
-ewin = 10.0
-
-[refinement]
-{refinement_solvent}ewin = 10.0
-rrho_method = "xtb"
-
-[scoring]
 solvent = "water"
-ewin = 10.0
 
 [compute]
 driver = "{driver}"
@@ -111,10 +98,14 @@ def main() -> None:
     )
     parser.add_argument("--driver", default="pyscf", choices=["pyscf", "psi4"])
     parser.add_argument(
-        "--refinement-driver",
-        choices=["pyscf", "psi4", "orbmol"],
-        default=None,
-        help="Driver for refinement only (default: --driver, which always scores)",
+        "--protocol",
+        choices=sorted(PROTOCOLS),
+        default="high_quality",
+        help=(
+            "Level of theory and energy windows for all three stages "
+            "(default: high_quality; 'fast' refines with OrbMol-v2 and scores "
+            "on def2-TZVPPD, ~5x cheaper for ~0.05 pKa)"
+        ),
     )
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument(
@@ -204,7 +195,7 @@ def main() -> None:
                 args.driver,
                 args.threads,
                 args.memory,
-                refinement_driver=args.refinement_driver,
+                protocol=args.protocol,
             )
             toml_path = compound_dir / "config.toml"
             toml_path.write_text(toml_text)

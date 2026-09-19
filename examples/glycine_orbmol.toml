@@ -1,34 +1,36 @@
-# pKa prediction for glycine: OrbMol-v2 refinement, PySCF scoring
+# pKa prediction for glycine with the "fast" protocol: OrbMol-v2 refinement.
 #
 # Three-stage workflow:
-#   1. Sampling   — CREST conformer/tautomer/protonation enumeration (GFN2-xTB)
+#   1. Sampling   — CREST conformer/tautomer/protonation enumeration (GFN2-xTB),
+#                   with a wide window because refinement is cheap
 #   2. Refinement — geometry optimization with the OrbMol-v2 machine-learned
-#                   potential (gas phase; wB97M-V/def2-TZVPD-quality) + xTB RRHO
-#   3. Scoring    — single-point energy (wB97M-V/def2-QZVPPD + SS(V)PE)
+#                   potential (gas phase; wB97M-V/def2-TZVPD-quality), then a
+#                   wB97X-3c/vDZP solvation energy on that geometry + xTB RRHO
+#   3. Scoring    — single-point energy (wB97M-V/def2-TZVPPD + SS(V)PE)
 #
 # OrbMol-v2 has no implicit solvent, so it can only refine: [compute] driver
-# runs scoring and must stay psi4 or pyscf.  Refinement being gas-phase has the
-# same caveat as Psi4's default gas-phase refinement: a zwitterion can collapse
-# to its neutral tautomer during optimization.
+# runs scoring and every DFT job, and must stay psi4 or pyscf.  The solvation
+# single point is what keeps the refinement filter ranking on the same physics
+# scoring does — a gas-phase filter reranks badly against solvated scoring.
+
+protocol = "fast"
 
 [molecule]
 smiles = "NCC(=O)O"
 charge_min = -1
 charge_max = 1
+solvent = "water"
 
-[sampling]
-approach = "rdkit_first"
-ewin = 6.0
+# The protocol sets every level of theory and window below; each key here just
+# restates one of its defaults (see PROTOCOLS in qm_pka/config.py).
 
 [refinement]
-driver = "orbmol"  # method defaults to "OrbMol-v2"; no basis or solvent
-ewin = 10.0
-rrho_method = "xtb"  # or "dft" for the OrbMol-v2 Hessian
-
-[scoring]
-# PySCF defaults: wB97M-V / def2-QZVPPD / SS(V)PE
-solvent = "water"
-ewin = 10.0
+method = "OrbMol-v2"  # an OrbMol model name is what selects OrbMol
+ewin = 6.0
+rrho = "xtb"  # or "refinement" for the OrbMol-v2 Hessian
+# Skip the solvation single point for conformers already this far above the
+# gas-phase minimum; they are recorded as "gas_prefilter" exclusions.
+solvation_prefilter_ewin = 12.0
 
 [compute]
 driver = "pyscf"

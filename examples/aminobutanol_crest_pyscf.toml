@@ -10,6 +10,7 @@
 smiles = "CC(O)C(N)C"
 charge_min = -2
 charge_max = 2
+solvent = "water"
 
 [sampling]
 approach = "crest_first"
@@ -19,14 +20,12 @@ prescreen_mode = "quick"
 full_mode = "default"
 
 [refinement]
-# PySCF defaults: wB97X-3c / vDZP / SS(V)PE
-solvent = "water"
-ewin = 10.0
-rrho_method = "xtb"
+# PySCF defaults: wB97X-3c / vDZP, minimized in SS(V)PE
+ewin = 8.0
+rrho = "xtb"
 
 [scoring]
 # PySCF defaults: wB97M-V / def2-QZVPPD / SS(V)PE
-solvent = "water"
 ewin = 10.0
 
 [compute]
