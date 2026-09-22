@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from qm_pka.charge_enumeration import enumerate_charge_state
+from qm_pka.charge_enumeration import charge_separated_variants, enumerate_charge_state
 from qm_pka.conformer_symmetry import DEFAULT_ETHR as CREGEN_ETHR
 from qm_pka.conformer_symmetry import effective_energy_offset
 from qm_pka.crest_runner import (
@@ -294,6 +294,14 @@ def run_approach1(
         species_at_q: set[str]
         if q == ref_charge:
             species_at_q = set(ref_tautomers)
+            # The tautomer enumerator moves protons but never separates charge,
+            # and the BFS below only runs for q != ref_charge -- so without this
+            # the reference charge has no internally charge-separated protomer at
+            # all, and an amino acid's zwitterion, its dominant neutral form in
+            # water, is never a microstate. Not tautomerised further: these are
+            # derived from every reference tautomer already.
+            for tau in ref_tautomers:
+                species_at_q.update(charge_separated_variants(tau))
         else:
             # BFS from all reference tautomers to target charge
             species_at_q = set()

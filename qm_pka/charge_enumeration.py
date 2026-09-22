@@ -162,6 +162,52 @@ def _apply_reactions(
     return results
 
 
+def charge_separated_variants(smiles: str) -> list[str]:
+    """Species at this molecule's *own* net charge, reached by moving one proton.
+
+    RDKit's ``TautomerEnumerator`` moves protons but never separates charge, and
+    :func:`enumerate_charge_state` walks *between* charge states, so neither
+    produces a protomer whose charge is internally separated. For ``NCC(=O)O``
+    that leaves the glycine zwitterion out of the q=0 microstate set entirely,
+    although it is the dominant neutral form in water.
+
+    This closes that gap by protonating every site and then deprotonating every
+    site of each product, keeping whatever comes back at the original charge.
+    The input itself is excluded; it is already a microstate.
+
+    The output is *not* filtered for plausibility, and most of it is not
+    populated at any pH: a proton is as happily moved from an amine to a
+    carbonyl oxygen, giving an amide anion beside a protonated carbonyl, as from
+    a carboxylic acid to an amine, giving the zwitterion. Filtering would need
+    the two sites' relative acidities, and that means a hand-maintained table.
+    Energetic screening does not substitute for one -- measured on
+    ``NC(CC(F)(F)F)C(=O)O``, two absurd protomers optimise to within 0.5 and
+    2.2 kcal/mol of the genuine zwitterion's 0.7, because they are not minima at
+    all: they relax straight back to the neutral form, and what gets compared is
+    that form's energy under a false label.
+
+    Relying on that relaxation is what makes leaving them in tolerable.
+    ``repair_migrated_conformers`` reads the protonation key off the geometry, so
+    a relaxed protomer is either re-filed onto the species it became or excluded
+    as ``no_matching_microstate``; it cannot reach a result wearing the wrong
+    label. The cost is the sampling spent finding that out -- across the pKa
+    training set this takes microstates at the reference charge from 81 to 171.
+    """
+    charge = get_formal_charge(smiles)
+    seen: set[str] = set()
+    results: list[str] = []
+    for protonated in protonate_all_sites(smiles):
+        for back in deprotonate_all_sites(protonated):
+            if get_formal_charge(back) != charge:
+                continue
+            can = canonical_smiles(back)
+            if can not in seen:
+                seen.add(can)
+                results.append(can)
+    own = canonical_smiles(smiles)
+    return [s for s in results if s != own]
+
+
 def enumerate_charge_state(smiles: str, target_charge: int) -> list[str]:
     """BFS to enumerate the distinct species at the target charge.
 
