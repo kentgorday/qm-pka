@@ -7,11 +7,12 @@ from rdkit.Chem import AllChem
 from qm_pka.charge_enumeration import (
     _DEPROTONATION_SMARTS,
     _PROTONATION_SMARTS,
+    charge_separated_variants,
     deprotonate_all_sites,
     enumerate_charge_state,
     protonate_all_sites,
 )
-from qm_pka.rdkit_utils import canonical_smiles, get_formal_charge
+from qm_pka.rdkit_utils import canonical_smiles, deduplicate_protomers, get_formal_charge
 
 
 class TestDeprotonateAllSites:
@@ -229,3 +230,49 @@ class TestRuleTableIsClosedUnderReversal:
         assert deprotonate_all_sites("CPC") == [canonical_smiles("C[P-]C")]
         assert canonical_smiles("CPC") in protonate_all_sites("C[P-]C")
         assert enumerate_charge_state("C[P-]C", 0) == [canonical_smiles("CPC")]
+
+
+class TestChargeSeparatedVariants:
+    """The reference charge needs protomers whose charge is internally separated.
+
+    Neither source of microstates produces one: RDKit's tautomer enumerator
+    moves protons but never separates charge, and `enumerate_charge_state` walks
+    *between* charge states. So glycine's q=0 set held only the neutral form,
+    although the zwitterion dominates in water.
+    """
+
+    def test_the_glycine_zwitterion_is_produced(self) -> None:
+        got = charge_separated_variants("NCC(=O)O")
+        assert canonical_smiles("[NH3+]CC(=O)[O-]") in got
+
+    def test_the_input_itself_is_not_returned(self) -> None:
+        """It is already a microstate; returning it would double-count."""
+        for smi in ("NCC(=O)O", "CC(=O)O", "O=C(O)CC(=O)O"):
+            assert canonical_smiles(smi) not in charge_separated_variants(smi)
+
+    def test_every_product_keeps_the_input_charge(self) -> None:
+        for smi in ("NCC(=O)O", "CN(C)CC(=O)O", "O=C(O)[C@@H]1CCCN1", "CCN"):
+            q = get_formal_charge(smi)
+            for out in charge_separated_variants(smi):
+                assert get_formal_charge(out) == q, f"{smi} -> {out}"
+
+    def test_a_molecule_with_no_basic_site_gains_only_resonance_forms(self) -> None:
+        """Acetic acid has nowhere for the proton to go but its own carbonyl.
+
+        `CC([O-])=[OH+]` is acetic acid drawn charge-separated, so
+        `deduplicate_protomers` collapses it rather than scoring it twice.
+        """
+        got = charge_separated_variants("CC(=O)O")
+        merged = deduplicate_protomers(sorted(set(got) | {canonical_smiles("CC(=O)O")}))
+        assert merged == [canonical_smiles("CC(=O)O")]
+
+    def test_the_charge_state_walk_is_left_alone(self) -> None:
+        """`enumerate_charge_state` keeps its BFS contract: already there, nothing added.
+
+        The gap is closed in `run_approach1` at the reference charge instead, so
+        callers walking between charge states see no change.
+        """
+        assert enumerate_charge_state("CC(=O)O", target_charge=0) == [canonical_smiles("CC(=O)O")]
+        assert enumerate_charge_state("NCC(=O)O", target_charge=0) == [
+            canonical_smiles("NCC(=O)O")
+        ]
