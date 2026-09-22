@@ -355,14 +355,19 @@ The set of things that look weird and aren't. Read before "fixing":
   The pin sets the numbers (with the ATM three-body term) through the dftd4 C
   API; pyscf-dispersion's own `set_param` passes the wrong arguments. Don't
   bypass either.
-- **OrbMol-v2 is loaded on CPU, in float64, from a checksummed file.**
+- **OrbMol-v2 is loaded on CPU, in float32-high, from a checksummed file.**
   orb-models 0.7.0 cannot target MPS (it calls `.cuda()` for any non-CPU
   device, and its Warp neighbour list has no MPS backend), and at ~20 atoms CPU
-  is faster anyway. float64 because geomeTRIC and the finite-difference Hessian
-  want a smooth surface; orb-models sets torch's global default dtype, so it is
-  one precision per process. The weights come from Hugging Face rather than
-  orb-models' default S3 URL (same file, ~1000x faster here) and their sha256
-  is checked on every load; `QM_PKA_ORBMOL_WEIGHTS` points at a local copy.
+  is faster anyway. The precision was float64, on the theory that geomeTRIC's
+  step control and the finite-difference Hessian both need a smooth surface;
+  measured, that costs 1.8x and buys nothing — 3% more gradient calls to
+  converge, energies within 0.042 kcal/mol, geometries within 0.02 Å,
+  frequencies within 3.4 cm⁻¹, no spurious imaginary modes either way, and
+  quasi-RRHO within 0.056 kcal/mol (≤0.009 pKa on a measured deprotonation).
+  orb-models sets torch's global default dtype, so it is one precision per
+  process. The weights come from Hugging Face rather than orb-models' default
+  S3 URL (same file, ~1000x faster here) and their sha256 is checked on every
+  load; `QM_PKA_ORBMOL_WEIGHTS` points at a local copy.
 - **orb-models' dependencies are bent in `pixi.toml`.** It pins
   `dm-tree==0.1.8`, which has no py3.13 wheel and whose conda-forge builds
   conflict with current pytorch, so the pin is overridden (orb-models only uses

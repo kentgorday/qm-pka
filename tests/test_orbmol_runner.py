@@ -62,15 +62,31 @@ class TestAgainstTrainingLevel:
         assert (e_oh - e_water) * HARTREE_TO_KCAL == pytest.approx(ref, abs=0.5)
 
     def test_gradient_is_derivative_of_energy(self) -> None:
-        _, grad = orbmol_runner._energy_gradient(WATER, 0, METHOD)
-        h = 1e-4  # Angstrom
+        # Deliberately a distorted geometry with a large step: the model runs at
+        # float32-high (see _PRECISION), so a total energy of ~-2000 eV carries
+        # ~1e-4 eV of noise.  Differencing that over a small step swamps the
+        # result -- at the water minimum with h=1e-4 A the reference is only good
+        # to ~1e-5 Hartree/Bohr against gradients of 4e-3, i.e. 0.4%.  Here the
+        # gradients are ~0.1 Hartree/Bohr and h is 10x larger, so the finite
+        # difference is good to 0.01% and the check is meaningful again.
+        distorted = Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array([[0.0, 0.0, 0.0], [0.0, 0.95, 0.75], [0.0, -0.80, 0.55]]),
+        )
+        _, grad = orbmol_runner._energy_gradient(distorted, 0, METHOD)
+        assert np.abs(grad).max() > 0.05  # the premise above
+        h = 1e-3  # Angstrom
         for atom, axis in [(0, 2), (1, 1), (2, 2)]:
-            dx = np.zeros_like(WATER.coords)
+            dx = np.zeros_like(distorted.coords)
             dx[atom, axis] = h
-            ep = orbmol_runner.single_point(Geometry(WATER.symbols, WATER.coords + dx), 0, METHOD)
-            em = orbmol_runner.single_point(Geometry(WATER.symbols, WATER.coords - dx), 0, METHOD)
+            ep = orbmol_runner.single_point(
+                Geometry(distorted.symbols, distorted.coords + dx), 0, METHOD
+            )
+            em = orbmol_runner.single_point(
+                Geometry(distorted.symbols, distorted.coords - dx), 0, METHOD
+            )
             fd = (ep - em) / (2 * h / orbmol_runner.BOHR_TO_ANG)
-            assert grad[atom, axis] == pytest.approx(fd, abs=1e-6)
+            assert grad[atom, axis] == pytest.approx(fd, abs=5e-5)
 
     def test_optimize_returns_energy_of_returned_geometry(self) -> None:
         # The pyscf driver once returned the input geometry's energy; guard the

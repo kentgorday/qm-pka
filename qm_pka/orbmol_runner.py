@@ -62,15 +62,30 @@ MODELS: dict[str, _Model] = {
     ),
 }
 
-# float64 throughout: geomeTRIC's energy-based step control and the
-# finite-difference Hessian both want a smooth surface, and orb-models itself
-# recommends against "float32-high" for second derivatives.  orb-models sets
-# torch's *global* default dtype when it loads a model, so one precision per
-# process is all that is safe anyway.
-_PRECISION = "float64"
+# orb-models' own default.  This was float64 on the theory that geomeTRIC's
+# energy-based step control and the finite-difference Hessian both need a smooth
+# surface; measured on 14 refinement inputs (4-18 atoms, across charge states),
+# that costs 1.8x and buys nothing.  float32-high needed 3% more gradient calls
+# to converge -- so the surface is not meaningfully rougher -- and against
+# float64 gave: energies within 0.042 kcal/mol, geometries within 0.02 A (median
+# 0.0000), frequencies within 3.4 cm^-1, no spurious imaginary modes (0 either
+# way), and quasi-RRHO free energies within 0.056 kcal/mol, worth <=0.009 pKa on
+# any measured deprotonation.  The largest deviations are on the flattest
+# surfaces, so re-check this if a very flexible molecule starts failing to
+# converge.  orb-models sets torch's *global* default dtype when it loads a
+# model, so one precision per process is all that is safe regardless.
+_PRECISION = "float32-high"
 
 # Central-difference step for the Hessian (Angstrom).
 _HESSIAN_STEP = 5e-3
+
+# Steps per coordinate system before giving up.  The DFT drivers stop at 100
+# because every step there is an SCF; a step here is one ~0.15 s gradient, so a
+# ceiling that low is inherited frugality rather than a real budget.  500 costs
+# at most ~75 s per phase on a 20-atom conformer -- far less than the wasted
+# solvation single point and Hessian that an unconverged geometry goes on to
+# buy, and less than the one geometry per ~400 that was being kept unconverged.
+_MAXITER = 500
 
 
 def _model_spec(method: str) -> _Model:
@@ -113,9 +128,8 @@ def _load(method: str) -> tuple[Any, Any]:
     weights = _verified_weights(local, spec.sha256)
     log.info(f"Loading {method} from {weights}")
     with warnings.catch_warnings():
-        # Both expected: float64 is chosen deliberately (see _PRECISION).
+        # Expected: orb-models announces the global dtype it sets (see _PRECISION).
         warnings.filterwarnings("ignore", message="Setting global torch default dtype")
-        warnings.filterwarnings("ignore", message="Consider passing 'precision=float32-high'")
         model, adapter = getattr(pretrained, spec.loader)(
             weights_path=weights, device="cpu", precision=_PRECISION, compile=False
         )
@@ -178,10 +192,11 @@ def optimize(
 ) -> tuple[Geometry, float, bool]:
     """Gas-phase geometry optimization with geomeTRIC.
 
-    Same strategy and convergence criteria as the pyscf driver: TRIC internal
-    coordinates for 100 steps, then Cartesian coordinates from the last
-    geometry for another 100.  Returns (geometry, energy_hartree, converged);
-    the geometry and energy are the last step's whether or not it converged.
+    Same strategy and convergence criteria as the pyscf driver -- TRIC internal
+    coordinates, then Cartesian coordinates from the last geometry -- but with a
+    far higher step ceiling (see _MAXITER).  Returns (geometry, energy_hartree,
+    converged); the geometry and energy are the last step's whether or not it
+    converged.
     """
     import geometric.engine
     import geometric.molecule
@@ -214,7 +229,7 @@ def optimize(
                     customengine=engine,
                     input=os.path.join(tmpdir, str(uuid.uuid4())),
                     coordsys=coordsys,
-                    maxiter=100,
+                    maxiter=_MAXITER,
                 )
                 xyz = np.asarray(progress.xyzs[-1], dtype=float)
                 energy = float(progress.qm_energies[-1])
@@ -229,7 +244,7 @@ def optimize(
     if converged:
         return opt_geom, energy, True
     log.info(
-        "Internal-coord opt did not converge in 100 steps; "
+        f"Internal-coord opt did not converge in {_MAXITER} steps; "
         "retrying from last geometry with Cartesian coords"
     )
     return _run(opt_geom, "cart")
