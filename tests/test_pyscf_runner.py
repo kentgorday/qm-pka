@@ -327,3 +327,102 @@ class TestOptimizeEnergy:
         # so a stale mf.e_tot (== e_input) would be caught.
         assert e_input - e_opt > 1e-3
         assert e_opt < e_at_opt + 1e-6
+
+
+class TestEinsumPathShim:
+    """PySCF 2.11's `lib.einsum` is broken under NumPy 2.4 for 3+ operands.
+
+    NumPy 2.4 dropped a field from `einsum_path(..., einsum_call=True)`, and
+    2.11 unpacks `contraction[:4]` unconditionally. Density-fitted gradients hit
+    it through `'xpq,mp,nq->mnxp'` in the auxiliary term. Importing
+    `qm_pka.pyscf_runner` applies the fix; upstream's own fix is in 2.12.0
+    (commit 4e77c7e), so this test keeps passing unchanged after an upgrade and
+    the shim becomes removable without touching it.
+    """
+
+    @staticmethod
+    def _cases() -> list[tuple[str, list[tuple[int, ...]]]]:
+        return [
+            ("xpq,mp,nq->mnxp", [(3, 4, 4), (2, 4), (2, 4)]),  # the DF-gradient one
+            ("ab,bc,cd->ad", [(3, 3), (3, 3), (3, 3)]),
+            ("ab,bc,cd,de->ae", [(3, 3), (3, 3), (3, 3), (3, 3)]),
+        ]
+
+    def test_multi_operand_einsum_matches_numpy(self) -> None:
+        from pyscf import lib
+
+        import qm_pka.pyscf_runner  # noqa: F401  (import applies the shim)
+
+        rng = np.random.default_rng(0)
+        for subscripts, shapes in self._cases():
+            tensors = [rng.random(shape) for shape in shapes]
+            assert np.allclose(
+                lib.einsum(subscripts, *tensors),
+                np.einsum(subscripts, *tensors),
+                atol=1e-12,
+            ), subscripts
+
+    def test_two_operand_contractions_are_untouched(self) -> None:
+        """They take an earlier branch that never reaches `_einsum_path`."""
+        from pyscf import lib
+
+        import qm_pka.pyscf_runner  # noqa: F401
+
+        rng = np.random.default_rng(1)
+        a, b = rng.random((4, 5)), rng.random((5, 6))
+        assert np.allclose(lib.einsum("ij,jk->ik", a, b), a @ b)
+
+    def test_numpy_einsum_path_is_not_modified_globally(self) -> None:
+        """The patch is confined to a PySCF module-private name.
+
+        Patching `numpy.einsum_path` itself would change behaviour for every
+        other consumer in the process, which is not ours to do.
+        """
+        import numpy
+
+        import qm_pka.pyscf_runner  # noqa: F401
+
+        assert numpy.einsum_path.__module__.startswith("numpy")
+
+    def test_applying_it_twice_does_not_stack(self) -> None:
+        from pyscf import lib
+
+        from qm_pka.pyscf_runner import _patch_einsum_path_for_numpy24
+
+        rng = np.random.default_rng(2)
+        tensors = [rng.random(s) for s in ((3, 4, 4), (2, 4), (2, 4))]
+        expected = np.einsum("xpq,mp,nq->mnxp", *tensors)
+        for _ in range(3):
+            _patch_einsum_path_for_numpy24()
+        assert np.allclose(lib.einsum("xpq,mp,nq->mnxp", *tensors), expected)
+
+
+class TestDensityFittingIsOn:
+    def test_the_mean_field_is_density_fitted(self) -> None:
+        """Matches Psi4, which already runs DF with the same aux basis."""
+        from qm_pka.pyscf_runner import _AUXBASIS, _build_mf
+        from qm_pka.types import Geometry
+
+        geom = Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]]),
+        )
+        _mol, mf = _build_mf(geom, 0, "PBE0", "def2-SVP", threads=1, memory_gb=1.0)
+        assert getattr(mf, "with_df", None) is not None, "density fitting not attached"
+        assert _AUXBASIS == "def2-universal-jkfit"
+
+    def test_density_fitting_sits_under_the_solvent_wrapper(self) -> None:
+        """Order is load-bearing: PySCF refuses solvent gradients otherwise."""
+        from qm_pka.pyscf_runner import _build_mf
+        from qm_pka.types import Geometry
+
+        geom = Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0], [-0.24, 0.93, 0.0]]),
+        )
+        _mol, mf = _build_mf(
+            geom, 0, "PBE0", "def2-SVP", "IEFPCM", "water", threads=1, memory_gb=1.0
+        )
+        assert hasattr(mf, "with_solvent"), "solvent wrapper missing"
+        inner = getattr(mf, "_scf", mf)
+        assert getattr(inner, "with_df", None) is not None, "DF must be the inner object"
