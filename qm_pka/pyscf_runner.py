@@ -42,6 +42,27 @@ _VV10_XC = {"wb97m-v", "wb97x-v", "b97m-v"}
 #
 # Mapping: user method name -> (internal xc string, dftd4 param name)
 # All use wB97X-V (466) as the XC functional with VV10 disabled.
+# Coulomb/exchange fitting basis for density-fitted SCF.  Weigend's universal
+# JK set, which is also what Psi4 blends by default -- a Psi4 run of ours
+# reports "SCF Algorithm Type is DF" and "Blend: DEF2-UNIVERSAL-JKFIT" -- so
+# turning it on here makes the two backends agree on the integral treatment
+# rather than silently differ.  It is the recommended fit for wB97X-3c/vDZP
+# (ORCA calls it def2/J) and, being derived from def2-QZVPP, matches the
+# def2-QZVPPD scoring basis too; there is no diffuse-augmented JK set to use
+# instead, and none is needed.
+#
+# Accuracy, measured against conventional four-centre integrals at
+# wB97M-V/def2-QZVPPD: a few hundredths of a kcal/mol on absolute energies
+# (H2O -0.022, OH- -0.014, formic acid -0.023, formate -0.011), and the errors
+# largely cancel in a difference -- formic acid's deprotonation energy moves
+# 0.012 kcal/mol, which is 0.009 pKa.
+#
+# The exception is heavier halide anions, where the fit is worth a few tenths:
+# F- -0.008 but Cl- -0.286 and Br- -0.384 kcal/mol.  These mostly cancel too,
+# since both sides of a pKa carry the same halogen, but a reaction that makes
+# or breaks a bare halide would not enjoy that cancellation.
+_AUXBASIS = "def2-universal-jkfit"
+
 _D4_COMPOSITES: dict[str, tuple[str, str]] = {
     "wb97x-d4": ("wb97x-v", "wb97x"),
     "wb97x-d4rev": ("wb97x-v", "wb97x-rev"),
@@ -84,6 +105,66 @@ def _register_d4_composites() -> None:
 
 
 _register_d4_composites()
+
+
+def _patch_einsum_path_for_numpy24() -> None:
+    """Restore ``lib.einsum`` for contractions of three or more tensors.
+
+    NumPy 2.4 dropped a field from ``einsum_path(..., einsum_call=True)``: each
+    contraction became ``(inds, einsum_str, remaining)`` where it had been
+    ``(inds, idx_rm, einsum_str, remaining)``. PySCF 2.11's
+    ``numpy_helper.einsum`` unpacks ``contraction[:4]`` unconditionally, so any
+    contraction over three or more operands raises ``ValueError: not enough
+    values to unpack``. One- and two-operand contractions take earlier branches
+    that never call ``_einsum_path``, which is why single-point energies are
+    fine and density-fitted *gradients* are not -- the auxiliary term in
+    ``pyscf/df/grad/rhf.py`` contracts ``'xpq,mp,nq->mnxp'``.
+
+    Fixed upstream in 2.12.0 by commit 4e77c7e, four lines in one file. We are
+    pinned below 2.13 because 2.13 changes the D4 composite dispatch (see
+    ``_register_d4_composites``), so the fix is applied here instead.
+
+    This replaces ``numpy_helper._einsum_path``, not ``numpy_helper.einsum``.
+    ``einsum`` reads ``_einsum_path`` from its module globals on every call, so
+    one assignment reaches every call site -- including the handful of PySCF
+    modules that bind ``einsum`` by name at import time and would keep a stale
+    reference if the function itself were swapped. ``numpy.einsum_path`` is left
+    alone, so nothing outside PySCF sees a modified NumPy.
+
+    Gated on behaviour, not on version numbers: the probe runs a real
+    three-operand contraction and patches only if it actually raises. On PySCF
+    2.12+ or NumPy 2.3 and older it is a no-op. Only ``ValueError`` is caught,
+    so an unrelated future breakage surfaces rather than being papered over.
+    """
+    import numpy
+    from pyscf.lib import numpy_helper
+
+    probe = (numpy.zeros((2, 2, 2)), numpy.zeros((2, 2)), numpy.zeros((2, 2)))
+    try:
+        numpy_helper.einsum("xpq,mp,nq->mnxp", *probe)
+        return
+    except ValueError:
+        pass
+
+    inner = numpy_helper._einsum_path
+    if getattr(inner, "_qm_pka_padded", False):
+        return
+
+    def padded(*args: Any, **kwargs: Any) -> Any:
+        result = inner(*args, **kwargs)
+        if not kwargs.get("einsum_call"):
+            return result
+        operands, contractions = result
+        # Re-insert the dropped ``idx_rm`` slot. PySCF unpacks it and
+        # ``remaining`` but reads neither, so a placeholder is exact.
+        restored = [(c[0], None, c[1], c[2]) if len(c) == 3 else c for c in contractions]
+        return operands, restored
+
+    padded._qm_pka_padded = True  # type: ignore[attr-defined]
+    numpy_helper._einsum_path = padded
+
+
+_patch_einsum_path_for_numpy24()
 
 
 def _patch_pcm_ecp_cavity() -> None:
@@ -254,6 +335,12 @@ def _build_mf(
 
     # Use RKS for closed-shell, UKS for open-shell
     mf = dft.RKS(mol) if mol.spin == 0 else dft.UKS(mol)
+
+    # Density fitting, before any solvent wrapper.  The order is not cosmetic:
+    # PySCF raises "Gradients of solvent are not computed. Solvent must be
+    # applied after density fit" if the wrapper is built around a conventional
+    # mean field and density fitting is attached underneath it afterwards.
+    mf = mf.density_fit(auxbasis=_AUXBASIS)
 
     # Set the XC functional.  For most methods PySCF parses the string
     # natively (e.g. "wB97X-D3BJ" dispatches D3BJ via pyscf-dispersion,
