@@ -32,16 +32,6 @@ ANG_TO_BOHR = 1.0 / BOHR_TO_ANG
 # Functionals that include VV10 nonlocal correlation
 _VV10_XC = {"wb97m-v", "wb97x-v", "b97m-v"}
 
-# ---------------------------------------------------------------------------
-# wB97X-V + D4 composite methods
-# ---------------------------------------------------------------------------
-# PySCF natively maps "wb97x-d4" to libxc 464 (original wB97X, 2008) + D4.
-# This is WRONG for wB97X-D4 as defined by dftd4, which uses the
-# reparameterized wB97X-V functional (libxc 466, 2013) with D4 dispersion
-# instead of VV10.  We register these composite methods correctly.
-#
-# Mapping: user method name -> (internal xc string, dftd4 param name)
-# All use wB97X-V (466) as the XC functional with VV10 disabled.
 # Coulomb/exchange fitting basis for density-fitted SCF.  Weigend's universal
 # JK set, which is also what Psi4 blends by default -- a Psi4 run of ours
 # reports "SCF Algorithm Type is DF" and "Blend: DEF2-UNIVERSAL-JKFIT" -- so
@@ -63,6 +53,16 @@ _VV10_XC = {"wb97m-v", "wb97x-v", "b97m-v"}
 # or breaks a bare halide would not enjoy that cancellation.
 _AUXBASIS = "def2-universal-jkfit"
 
+# ---------------------------------------------------------------------------
+# wB97X-V + D4 composite methods
+# ---------------------------------------------------------------------------
+# PySCF natively maps "wb97x-d4" to libxc 464 (original wB97X, 2008) + D4.
+# This is WRONG for wB97X-D4 as defined by dftd4, which uses the
+# reparameterized wB97X-V functional (libxc 466, 2013) with D4 dispersion
+# instead of VV10.  We register these composite methods correctly.
+#
+# Mapping: user method name -> (internal xc string, dftd4 param name)
+# All use wB97X-V (466) as the XC functional with VV10 disabled.
 _D4_COMPOSITES: dict[str, tuple[str, str]] = {
     "wb97x-d4": ("wb97x-v", "wb97x"),
     "wb97x-d4rev": ("wb97x-v", "wb97x-rev"),
