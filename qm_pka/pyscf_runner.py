@@ -307,10 +307,20 @@ def _build_mf(
 
     Returns (mol, mf) where mf is ready for .kernel().
 
-    memory_gb caps the integral buffers via Mole.max_memory (PySCF's own
-    units are MB).  Unlike Psi4's --memory this is a budget PySCF acts on --
-    it picks incore vs outcore algorithms from it and will try to allocate --
-    so overshooting real free memory risks an OOM rather than just slow I/O.
+    memory_gb sets Mole.max_memory (PySCF's own units are MB).  Unlike Psi4's
+    --memory this is a budget PySCF acts on -- it picks incore vs outcore
+    algorithms from it and will try to allocate -- so overshooting real free
+    memory risks an OOM rather than just slow I/O.
+
+    It is not a cap on the process, and off Linux it barely limits anything.
+    PySCF decides what fits by subtracting lib.current_memory() from
+    max_memory, and current_memory() reads /proc, so on macOS it always
+    returns 0: each buffer is checked against the whole budget as if nothing
+    else were allocated.  At wB97M-V/def2-QZVPPD on a 10-heavy-atom molecule
+    (966 AOs), both DF tensors (3.5 + 1.8 GB) stay in core at memory_gb=4 and
+    the process peaks at 13-15 GB whether memory_gb is 4 or 8, with DF or
+    conventional integrals alike.  On Linux the accounting is real, so the
+    same job would likely move the larger DF tensor to disk instead.
     """
     from pyscf import dft, gto, lib
 
