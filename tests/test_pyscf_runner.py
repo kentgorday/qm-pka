@@ -386,21 +386,25 @@ class TestEinsumPathShim:
 
     def test_applying_it_twice_does_not_stack(self) -> None:
         from pyscf import lib
+        from pyscf.lib import numpy_helper
 
         from qm_pka.pyscf_runner import _patch_einsum_path_for_numpy24
 
+        installed = numpy_helper._einsum_path
         rng = np.random.default_rng(2)
         tensors = [rng.random(s) for s in ((3, 4, 4), (2, 4), (2, 4))]
         expected = np.einsum("xpq,mp,nq->mnxp", *tensors)
         for _ in range(3):
             _patch_einsum_path_for_numpy24()
+        # Re-applying must leave the installed function alone, not wrap it again.
+        assert numpy_helper._einsum_path is installed
         assert np.allclose(lib.einsum("xpq,mp,nq->mnxp", *tensors), expected)
 
 
 class TestDensityFittingIsOn:
     def test_the_mean_field_is_density_fitted(self) -> None:
         """Matches Psi4, which already runs DF with the same aux basis."""
-        from qm_pka.pyscf_runner import _AUXBASIS, _build_mf
+        from qm_pka.pyscf_runner import _build_mf
         from qm_pka.types import Geometry
 
         geom = Geometry(
@@ -409,7 +413,7 @@ class TestDensityFittingIsOn:
         )
         _mol, mf = _build_mf(geom, 0, "PBE0", "def2-SVP", threads=1, memory_gb=1.0)
         assert getattr(mf, "with_df", None) is not None, "density fitting not attached"
-        assert _AUXBASIS == "def2-universal-jkfit"
+        assert mf.with_df.auxbasis == "def2-universal-jkfit"
 
     def test_density_fitting_sits_under_the_solvent_wrapper(self) -> None:
         """Order is load-bearing: PySCF refuses solvent gradients otherwise."""
@@ -424,5 +428,8 @@ class TestDensityFittingIsOn:
             geom, 0, "PBE0", "def2-SVP", "IEFPCM", "water", threads=1, memory_gb=1.0
         )
         assert hasattr(mf, "with_solvent"), "solvent wrapper missing"
-        inner = getattr(mf, "_scf", mf)
-        assert getattr(inner, "with_df", None) is not None, "DF must be the inner object"
+        assert getattr(mf, "with_df", None) is not None, "density fitting not attached"
+        # Either order leaves both attributes on the object, so check what the
+        # order decides: PySCF refuses to build solvent gradients when density
+        # fitting was attached outside the solvent wrapper.
+        mf.nuc_grad_method()
