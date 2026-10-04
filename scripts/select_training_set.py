@@ -65,8 +65,10 @@ def base_filters(
     valid_types = {"pKa1", "pKa2", "pKa3", "pKaH1", "pKaH2", "pKaH3", "pKb1", "pKb2"}
     out = out[out["pka_type"].isin(valid_types)]
 
-    # Organic: SMILES must contain C
-    out = out[out["SMILES"].str.contains("C", na=False)]
+    # Organic: must contain carbon. Ask RDKit rather than the SMILES text, where
+    # aromatic carbon is a lowercase "c" and an uppercase "C" also matches Cl.
+    organic = [smi for smi in out["SMILES"].dropna().unique() if has_carbon(smi)]
+    out = out[out["SMILES"].isin(organic)]
 
     # Heavy atom count
     def _heavy_atoms(smi: str) -> int | None:
@@ -128,6 +130,13 @@ def count_ionizable_sites(smi: str) -> int | None:
             # The :1-mapped atom is the first atom in the SMARTS reactant
             sites.add(match[0])
     return len(sites)
+
+
+def has_carbon(smi: str) -> bool:
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return False
+    return any(atom.GetAtomicNum() == 6 for atom in mol.GetAtoms())
 
 
 def has_aromatic_ring(smi: str) -> bool:
