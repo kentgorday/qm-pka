@@ -10,6 +10,7 @@ Usage:
         --input ~/Dissociation-Constants/iupac_high-confidence_v2_3.csv \
         --output training_set.csv \
         --max-heavy-atoms 10 \
+        --max-rotatable-bonds 2 \
         --max-dissociations 2 \
         --target-size 40
 """
@@ -37,6 +38,7 @@ def base_filters(
     df: pd.DataFrame,
     *,
     max_heavy_atoms: int = 10,
+    max_rotatable_bonds: int | None = 2,
     max_dissociations: int = 2,
     max_ionizable_sites: int | None = 4,
     t_min: float = 24.0,
@@ -81,6 +83,13 @@ def base_filters(
     ha_map = {smi: _heavy_atoms(smi) for smi in unique_smiles}
     out["heavy_atoms"] = out["SMILES"].map(ha_map)
     out = out[out["heavy_atoms"].notna() & (out["heavy_atoms"] <= max_heavy_atoms)]
+
+    # Rotatable bonds (RDKit's strict definition). Limits the size of the
+    # conformer ensemble each charge state carries through refinement.
+    if max_rotatable_bonds is not None:
+        rot_map = {smi: count_rotatable_bonds(smi) for smi in out["SMILES"].unique()}
+        out["rotatable_bonds"] = out["SMILES"].map(rot_map)
+        out = out[out["rotatable_bonds"].notna() & (out["rotatable_bonds"] <= max_rotatable_bonds)]
 
     # Max dissociations per molecule
     dissoc_counts = out.groupby("SMILES")["pka_type"].nunique()
@@ -130,6 +139,13 @@ def count_ionizable_sites(smi: str) -> int | None:
             # The :1-mapped atom is the first atom in the SMARTS reactant
             sites.add(match[0])
     return len(sites)
+
+
+def count_rotatable_bonds(smi: str) -> int | None:
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return None
+    return int(rdMolDescriptors.CalcNumRotatableBonds(mol))
 
 
 def has_carbon(smi: str) -> bool:
@@ -482,6 +498,12 @@ def main() -> None:
     )
     parser.add_argument("--output", type=Path, default=Path("training_set.csv"))
     parser.add_argument("--max-heavy-atoms", type=int, default=10)
+    parser.add_argument(
+        "--max-rotatable-bonds",
+        type=int,
+        default=2,
+        help="Max rotatable bonds (RDKit strict definition); negative disables the limit",
+    )
     parser.add_argument("--max-dissociations", type=int, default=2)
     parser.add_argument(
         "--max-ionizable-sites",
@@ -527,6 +549,7 @@ def main() -> None:
     filtered = base_filters(
         df,
         max_heavy_atoms=args.max_heavy_atoms,
+        max_rotatable_bonds=args.max_rotatable_bonds if args.max_rotatable_bonds >= 0 else None,
         max_dissociations=args.max_dissociations,
         max_ionizable_sites=args.max_ionizable_sites,
         t_min=args.t_min,

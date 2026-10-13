@@ -57,4 +57,4 @@ class TestParsePkaColumn:
             kinds = {v.label.startswith("pKaH") for v in values}
             if len(kinds) > 1:
                 mixed += 1
-        assert mixed == 2, "perrin3032 and perrin3287 mix label types"
+        assert mixed == 2, "perrin3294 and perrin3287 mix label types"
