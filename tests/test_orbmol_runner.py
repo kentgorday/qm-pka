@@ -49,6 +49,33 @@ class TestWithoutModel:
         with pytest.raises(RuntimeError, match="sha256"):
             orbmol_runner._verified_weights(str(bogus), orbmol_runner.MODELS["orbmol-v2"].sha256)
 
+    def test_cached_weights_are_used_without_asking_the_server(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # cached_path() revalidates over the network on every call; a 429 there
+        # failed every load of weights that were already on disk.
+        import cached_path
+
+        def no_network(*args: object, **kwargs: object) -> Path:
+            raise AssertionError("went to the network with a cached copy on disk")
+
+        cached = tmp_path / "weights.ckpt"
+        monkeypatch.delenv("QM_PKA_ORBMOL_WEIGHTS", raising=False)
+        monkeypatch.setattr(cached_path, "find_latest_cached", lambda url: cached)
+        monkeypatch.setattr(cached_path, "cached_path", no_network)
+        assert orbmol_runner._weights_path(orbmol_runner.MODELS["orbmol-v2"]) == str(cached)
+
+    def test_weights_are_downloaded_when_none_are_cached(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import cached_path
+
+        fetched = tmp_path / "fetched.ckpt"
+        monkeypatch.delenv("QM_PKA_ORBMOL_WEIGHTS", raising=False)
+        monkeypatch.setattr(cached_path, "find_latest_cached", lambda url: None)
+        monkeypatch.setattr(cached_path, "cached_path", lambda url: fetched)
+        assert orbmol_runner._weights_path(orbmol_runner.MODELS["orbmol-v2"]) == str(fetched)
+
 
 @pytest.mark.slow  # loads a 100 MB model (downloaded on first use)
 class TestAgainstTrainingLevel:

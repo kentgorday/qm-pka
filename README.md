@@ -367,7 +367,12 @@ The set of things that look weird and aren't. Read before "fixing":
   orb-models sets torch's global default dtype, so it is one precision per
   process. The weights come from Hugging Face rather than orb-models' default
   S3 URL (same file, ~1000x faster here) and their sha256 is checked on every
-  load; `QM_PKA_ORBMOL_WEIGHTS` points at a local copy.
+  load; `QM_PKA_ORBMOL_WEIGHTS` points at a local copy. Once downloaded they
+  are read from the cache without asking the server again — the checksum
+  already identifies the file, and a rate-limited revalidation request used to
+  fail the load with the weights on disk. Refinement loads the model before
+  its first conformer, so a model that cannot be loaded stops the run instead
+  of being recorded as every conformer's optimization failure.
 - **orb-models' dependencies are bent in `pixi.toml`.** It pins
   `dm-tree==0.1.8`, which has no py3.13 wheel and whose conda-forge builds
   conflict with current pytorch, so the pin is overridden (orb-models only uses

@@ -72,6 +72,10 @@ def refine(
     """
     engine = _get_driver(config.engine)
     dft = _get_driver(driver)
+    if config.engine == "orbmol":
+        # Outside the per-conformer handlers below, which would record a model
+        # that cannot be loaded as each conformer's own optimization failure.
+        engine.preload(config.method)
     xtb_solvent = solvent if config.rrho == "xtb" else None
 
     for cs in ensemble.charge_states.values():

@@ -50,11 +50,13 @@ class FakeDriver:
         gas: dict[float, float] | None = None,
         solvated: dict[float, float] | None = None,
         fail_solvation: bool = False,
+        fail_preload: bool = False,
     ) -> None:
         self.opt_energies = list(opt or [])
         self.gas = gas or {}
         self.solvated = solvated or {}
         self.fail_solvation = fail_solvation
+        self.fail_preload = fail_preload
         self.calls: list[tuple[str, str, bool]] = []  # (kind, method, solvated?)
 
     # The drivers key everything off geometry; these stubs key off the z offset
@@ -62,6 +64,11 @@ class FakeDriver:
     @staticmethod
     def _key(g: Geometry) -> float:
         return round(float(g.coords[1, 1]) - 0.757, 6)
+
+    def preload(self, method: str) -> None:
+        self.calls.append(("preload", method, False))
+        if self.fail_preload:
+            raise OSError("429 Client Error: Too Many Requests")
 
     def optimize(
         self, g: Geometry, charge: int, method: str, basis: str, *a: Any, **kw: Any
@@ -178,6 +185,26 @@ class TestOrbmolSolvationSinglePoint:
         assert conf.solvation_energy == pytest.approx(-0.02)  # the DFT pair's difference
         assert orbmol.count("single_point") == 0
         assert [c[1] for c in dft.calls] == ["wB97X-3c", "wB97X-3c"]
+
+
+class TestOrbmolModelLoad:
+    def test_a_model_that_cannot_load_stops_the_run(self, patch_drivers: Any) -> None:
+        # Not a conformer's failure.  Caught by the per-conformer handler, it
+        # excluded every conformer as "optimization_failed" and left a run that
+        # finished, exit 0, with an empty ensemble.
+        orbmol = FakeDriver(opt=[-76.40], fail_preload=True)
+        patch_drivers(orbmol, FakeDriver())
+        ens = ensemble_of([-76.40])
+        cfg = RefinementConfig(
+            method="OrbMol-v2", basis="", solvation="none", rrho="refinement", engine="orbmol"
+        )
+        with pytest.raises(OSError, match="Too Many Requests"):
+            refinement.refine(ens, cfg, driver="pyscf")
+
+        ms = ens.charge_states[0].microstates[0]
+        assert len(ms.conformers) == 1
+        assert ms.excluded_conformers == []
+        assert orbmol.count("optimize") == 0
 
 
 class TestGasPrefilter:

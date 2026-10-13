@@ -47,10 +47,11 @@ class _Model:
 
 
 # Weights are fetched on first use and cached by cached_path under
-# ~/.cache/cached_path; set QM_PKA_ORBMOL_WEIGHTS to a local copy for offline
-# use.  Hugging Face serves the same file orb-models' default S3 URL does
-# (identical sha256) but, in testing, ~1000x faster.  The checksum is verified
-# on every load, so a changed or truncated file cannot silently change results.
+# ~/.cache/cached_path, and read from there without a network call afterwards
+# (see _weights_path); set QM_PKA_ORBMOL_WEIGHTS to use a copy from elsewhere.
+# Hugging Face serves the same file orb-models' default S3 URL does (identical
+# sha256) but, in testing, ~1000x faster.  The checksum is verified on every
+# load, so a changed or truncated file cannot silently change results.
 MODELS: dict[str, _Model] = {
     "orbmol-v2": _Model(
         loader="orbmol_v2",
@@ -108,6 +109,22 @@ def _verified_weights(path: str, sha256: str) -> str:
     return path
 
 
+def _weights_path(spec: _Model) -> str:
+    """Return a local path to the weights, going to the network only for a first download."""
+    if override := os.environ.get("QM_PKA_ORBMOL_WEIGHTS"):
+        return override
+
+    from cached_path import cached_path, find_latest_cached
+
+    # cached_path() asks the server for the file's ETag on every call, cached
+    # copy or not, so every process start depended on Hugging Face answering:
+    # a 429 from its rate limiter failed the load with the weights on disk.
+    # The sha256 pin already says exactly which file is wanted, so a cached copy
+    # needs no revalidation.
+    cached = find_latest_cached(spec.url)
+    return str(cached if cached is not None else cached_path(spec.url))
+
+
 @cache
 def _load(method: str) -> tuple[Any, Any]:
     """Load a model on CPU, once per process.
@@ -120,12 +137,10 @@ def _load(method: str) -> tuple[Any, Any]:
     spec = _model_spec(method)
 
     import warp
-    from cached_path import cached_path
     from orb_models.forcefield import pretrained
 
     warp.config.quiet = True  # no initialisation banner on stdout
-    local = os.environ.get("QM_PKA_ORBMOL_WEIGHTS") or str(cached_path(spec.url))
-    weights = _verified_weights(local, spec.sha256)
+    weights = _verified_weights(_weights_path(spec), spec.sha256)
     log.info(f"Loading {method} from {weights}")
     with warnings.catch_warnings():
         # Expected: orb-models announces the global dtype it sets (see _PRECISION).
@@ -134,6 +149,18 @@ def _load(method: str) -> tuple[Any, Any]:
             weights_path=weights, device="cpu", precision=_PRECISION, compile=False
         )
     return model, adapter
+
+
+def preload(method: str) -> None:
+    """Load the model now, so that failing to get it stops the run.
+
+    refine() wraps each conformer in a handler that records the failure and
+    moves on -- right for an SCF that will not converge, wrong for a model that
+    cannot be loaded, which is no conformer's fault.  Left to the first
+    optimization, a failed load excluded every conformer in turn as
+    "optimization_failed" and the run finished, exit 0, with an empty ensemble.
+    """
+    _load(method.lower())
 
 
 def _energy_gradient(
