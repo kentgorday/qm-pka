@@ -86,7 +86,7 @@ class TestDriverDefaults:
         # refinement energy is to minimize in solvent outright.
         assert cfg.refinement.solvation == "optimize"
         assert (cfg.scoring.method, cfg.scoring.basis) == ("wB97M-V", "def2-QZVPPD")
-        assert cfg.scoring.solvent_model == "SSVPE"
+        assert cfg.scoring.solvent_model == "IEFPCM"
 
     def test_psi4_adds_a_single_point_instead(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
@@ -138,6 +138,21 @@ class TestDriverDefaults:
                 solvent_model = "SMD"
                 [compute]
                 driver = "psi4"
+            """)
+            )
+
+    def test_pyscf_does_not_offer_ssvpe(self, tmp_toml: Callable[[str], Path]) -> None:
+        # Its symmetrized system matrix costs ions several kcal/mol on PySCF's
+        # surface, so the model is refused rather than left as a trap.
+        with pytest.raises(ValueError, match="not available on the pyscf driver"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                [scoring]
+                solvent_model = "SSVPE"
+                [compute]
+                driver = "pyscf"
             """)
             )
 
@@ -218,7 +233,7 @@ class TestProtocols:
         assert prov["refinement"]["solvation"] == {
             "mode": "single_point",
             "level": "wB97X-3c/vDZP",
-            "model": "SSVPE",
+            "model": "IEFPCM",
             "driver": "pyscf",
         }
         assert prov["scoring"]["basis"] == "def2-TZVPPD"
@@ -646,14 +661,14 @@ class TestDeprecatedSpellings:
                 [molecule]
                 smiles = "CCO"
                 [refinement]
-                solvent_model = "SSVPE"
+                solvent_model = "CPCM"
                 [compute]
                 driver = "pyscf"
             """)
             )
         assert cfg.refinement.solvation == "optimize"
-        assert cfg.scoring.solvent_model == "SSVPE"
-        assert "[refinement] solvent_model = 'SSVPE' is deprecated" in caplog.text
+        assert cfg.scoring.solvent_model == "CPCM"
+        assert "[refinement] solvent_model = 'CPCM' is deprecated" in caplog.text
 
     def test_per_stage_solvent_moves_to_molecule(
         self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture

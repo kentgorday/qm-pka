@@ -136,7 +136,7 @@ class TestPCMECPCavity:
             symbols=("O", "H", "H"),
             coords=np.array([[0.0, 0.0, 0.1173], [0.0, 0.7572, -0.4692], [0.0, -0.7572, -0.4692]]),
         )
-        _mol, mf = _build_mf(geom, 0, "pbe", basis, "SSVPE", "water", 1)
+        _mol, mf = _build_mf(geom, 0, "pbe", basis, "IEFPCM", "water", 1)
         mf.with_solvent.build()
         return int(mf.with_solvent.surface["grid_coords"].shape[0])
 
@@ -306,7 +306,7 @@ class TestD4ParametersMatchDftd4:
         # dispersion settings over (mf.disp and mf.nlc on the newer route).
         mol = gto.M(atom=_WATER, verbose=0)
         geom = Geometry(symbols=tuple(mol.elements), coords=mol.atom_coords(unit="Angstrom"))
-        _mol, mf = _build_mf(geom, 0, method, "def2-svp", "SSVPE", "water")
+        _mol, mf = _build_mf(geom, 0, method, "def2-svp", "IEFPCM", "water")
         ref = d4_reference[_D4_COMPOSITES[method][1]]
         assert not mf.do_nlc()
         assert float(mf.get_dispersion()) == pytest.approx(float(ref["energy"]), rel=1e-10)

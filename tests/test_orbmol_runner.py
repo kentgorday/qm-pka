@@ -41,7 +41,7 @@ class TestWithoutModel:
     @pytest.mark.parametrize("fn", ["single_point", "optimize", "frequencies"])
     def test_solvent_model_refused(self, fn: str) -> None:
         with pytest.raises(ValueError, match="gas-phase potential"):
-            getattr(orbmol_runner, fn)(WATER, 0, METHOD, solvent_model="SSVPE", solvent="water")
+            getattr(orbmol_runner, fn)(WATER, 0, METHOD, solvent_model="IEFPCM", solvent="water")
 
     def test_checksum_mismatch_raises(self, tmp_path: Path) -> None:
         bogus = tmp_path / "weights.ckpt"

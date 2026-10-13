@@ -160,7 +160,7 @@ score. All three drivers implement the same three operations (`single_point`,
 `scoring.py` are backend-agnostic.
 
 - **`"pyscf"` (default).** In-process Python library. Supports analytical PCM
-  gradients (SS(V)PE, IEF-PCM, C-PCM) and SMD, so it is the only backend that
+  gradients (IEF-PCM, the default; C-PCM) and SMD, so it is the only backend that
   can *minimize* in implicit solvent. Of the 3c composites it implements only
   wB97X-3c.
 - **`"psi4"`.** Subprocess driver, writes input decks and parses output.

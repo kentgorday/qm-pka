@@ -6,7 +6,7 @@
 #   2. Refinement — geometry optimization with the OrbMol-v2 machine-learned
 #                   potential (gas phase; wB97M-V/def2-TZVPD-quality), then a
 #                   wB97X-3c/vDZP solvation energy on that geometry + xTB RRHO
-#   3. Scoring    — single-point energy (wB97M-V/def2-TZVPPD + SS(V)PE)
+#   3. Scoring    — single-point energy (wB97M-V/def2-TZVPPD + IEF-PCM)
 #
 # OrbMol-v2 has no implicit solvent, so it can only refine: [compute] driver
 # runs scoring and every DFT job, and must stay psi4 or pyscf.  The solvation

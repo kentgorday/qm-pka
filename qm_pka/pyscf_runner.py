@@ -508,7 +508,6 @@ def _build_mf(
             "IEFPCM": "IEF-PCM",
             "CPCM": "C-PCM",
             "COSMO": "COSMO",
-            "SSVPE": "SS(V)PE",
         }
         if solvent_model_upper == "SMD":
             mf = pyscf_solvent.SMD(mf)

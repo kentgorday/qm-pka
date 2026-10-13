@@ -63,10 +63,14 @@ PYSCF_COMPOSITES = {"wb97x-3c"}
 
 # Implicit-solvent models, by the driver that can run them.  One model is used
 # for every solvation energy in a run, so the refinement filter ranks on the
-# same physics scoring does.  Psi4 has no SS(V)PE; IEF-PCM is its equivalent
-# for an isotropic solvent.
+# same physics scoring does.  Both drivers default to IEF-PCM, which agrees
+# across them to ~0.15 kcal/mol.  PySCF's SS(V)PE is not offered: it symmetrizes
+# the system matrix, and on PySCF's surface that moved the solvation energy of
+# acetate and methylammonium by 2.7 and 4.2 kcal/mol and did not converge with
+# the surface grid (the ill behaviour Lange & Herbert describe, Chem. Phys.
+# Lett. 509, 77).
 _SOLVENT_MODELS: dict[str, set[str]] = {
-    "pyscf": {"SSVPE", "IEFPCM", "PCM", "CPCM", "COSMO", "SMD", "DDPCM", "DDCOSMO"},
+    "pyscf": {"IEFPCM", "PCM", "CPCM", "COSMO", "SMD", "DDPCM", "DDCOSMO"},
     "psi4": {"IEFPCM", "CPCM"},
 }
 
@@ -215,7 +219,7 @@ PROTOCOLS: dict[str, dict[str, dict[str, Any]]] = {
 
 _DFT_REFINEMENT_DEFAULT_METHOD = "wB97X-3c"
 _SCORING_DEFAULTS = {"method": "wB97M-V", "basis": "def2-QZVPPD"}
-_DEFAULT_SOLVENT_MODEL = {"pyscf": "SSVPE", "psi4": "IEFPCM"}
+_DEFAULT_SOLVENT_MODEL = {"pyscf": "IEFPCM", "psi4": "IEFPCM"}
 
 
 # ---------------------------------------------------------------------------

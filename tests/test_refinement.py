@@ -126,7 +126,7 @@ class TestDftSolvationSinglePoint:
             ewin=100.0,
             engine="pyscf",
         )
-        refinement.refine(ens, cfg, driver="pyscf", solvent_model="SSVPE")
+        refinement.refine(ens, cfg, driver="pyscf", solvent_model="IEFPCM")
 
         confs = ens.charge_states[0].microstates[0].conformers
         assert len(confs) == 2
@@ -148,7 +148,7 @@ class TestDftSolvationSinglePoint:
             rrho="refinement",
             engine="pyscf",
         )
-        refinement.refine(ens, cfg, driver="pyscf", solvent_model="SSVPE")
+        refinement.refine(ens, cfg, driver="pyscf", solvent_model="IEFPCM")
 
         ms = ens.charge_states[0].microstates[0]
         assert ms.conformers == []
@@ -178,7 +178,7 @@ class TestOrbmolSolvationSinglePoint:
             rrho="refinement",
             engine="orbmol",
         )
-        refinement.refine(ens, cfg, driver="pyscf", solvent_model="SSVPE")
+        refinement.refine(ens, cfg, driver="pyscf", solvent_model="IEFPCM")
 
         (conf,) = ens.charge_states[0].microstates[0].conformers
         assert conf.electronic_energy == pytest.approx(-76.40)  # OrbMol's
@@ -228,7 +228,7 @@ class TestGasPrefilter:
             engine="pyscf",
         )
         with caplog.at_level(logging.INFO):
-            refinement.refine(ens, cfg, driver="pyscf", solvent_model="SSVPE")
+            refinement.refine(ens, cfg, driver="pyscf", solvent_model="IEFPCM")
         return ens, driver
 
     def test_off_by_default_every_conformer_gets_a_single_point(
@@ -276,7 +276,7 @@ class TestSolvatedOptimization:
             rrho="refinement",
             engine="pyscf",
         )
-        refinement.refine(ens, cfg, driver="pyscf", solvent_model="SSVPE")
+        refinement.refine(ens, cfg, driver="pyscf", solvent_model="IEFPCM")
 
         (conf,) = ens.charge_states[0].microstates[0].conformers
         assert conf.electronic_energy == pytest.approx(-76.40)

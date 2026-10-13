@@ -3,8 +3,8 @@
 #
 # Three-stage workflow:
 #   1. Sampling   — CREST physics-based tautomer/charge enum + conformers (GFN2-xTB)
-#   2. Refinement — geometry optimization (wB97X-3c/vDZP + SS(V)PE) + xTB RRHO
-#   3. Scoring    — single-point energy (wB97M-V/def2-QZVPPD + SS(V)PE)
+#   2. Refinement — geometry optimization (wB97X-3c/vDZP + IEF-PCM) + xTB RRHO
+#   3. Scoring    — single-point energy (wB97M-V/def2-QZVPPD + IEF-PCM)
 
 [molecule]
 smiles = "CC(O)C(N)C"
@@ -20,12 +20,12 @@ prescreen_mode = "quick"
 full_mode = "default"
 
 [refinement]
-# PySCF defaults: wB97X-3c / vDZP, minimized in SS(V)PE
+# PySCF defaults: wB97X-3c / vDZP, minimized in IEF-PCM
 ewin = 8.0
 rrho = "xtb"
 
 [scoring]
-# PySCF defaults: wB97M-V / def2-QZVPPD / SS(V)PE
+# PySCF defaults: wB97M-V / def2-QZVPPD / IEF-PCM
 ewin = 10.0
 
 [compute]
