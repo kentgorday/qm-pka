@@ -2,6 +2,8 @@
 name = "qm-pka"
 version = "0.1.0"
 requires-python = ">=3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 
 [build-system]
 requires = ["hatchling"]

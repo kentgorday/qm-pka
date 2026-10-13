@@ -441,3 +441,14 @@ What's not yet here:
   is not committed.
 - Training-set batch outputs are not committed beyond a few sample runs in
   `smoke/` and `train_set/`.
+
+## License
+
+Apache-2.0; see [LICENSE](LICENSE).
+
+That covers qm-pka only. Its dependencies are installed separately (pixi
+fetches them from conda-forge and PyPI) and keep their own licenses. Psi4, xtb
+and CREST (LGPL-3.0) run as separate executables. Of the libraries qm-pka
+imports, most are Apache-2.0, BSD or MIT (PySCF, RDKit, PyTorch, orb-models,
+geomeTRIC); ASE is LGPL-2.1, and pyscf-dispersion bundles the LGPL-3.0 dftd4
+and s-dftd3 libraries.
