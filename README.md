@@ -163,7 +163,9 @@ score. All three drivers implement the same three operations (`single_point`,
   gradients (IEF-PCM, the default; C-PCM) and SMD, so it is the only backend that
   can *minimize* in implicit solvent. Of the 3c composites it implements only
   wB97X-3c.
-- **`"psi4"`.** Subprocess driver, writes input decks and parses output.
+- **`"psi4"`.** Subprocess driver, writes input decks and parses output. The
+  `psi4` executable comes from a pixi environment of its own
+  (`pixi install -e psi4`); qm-pka never imports Psi4.
   **No analytical PCM gradients**, so `refinement.solvation = "optimize"` is
   refused; it minimizes in gas phase and adds one PCM single point on that
   geometry. Offers all five 3c composites (wB97X-3c, r2SCAN-3c, B97-3c,
@@ -247,7 +249,8 @@ into `ensemble.settings` so a checkpoint on disk says which level produced it.
 ## Quickstart
 
 ```bash
-pixi install
+pixi install            # the default environment: everything but Psi4
+pixi install -e psi4    # only for compute.driver = "psi4"
 pixi run python scripts/run_pipeline.py examples/glycine_pyscf.toml
 ```
 
@@ -317,11 +320,25 @@ Pre-commit hook runs ruff. Mypy is strict.
 
 The set of things that look weird and aren't. Read before "fixing":
 
-- **`xtb` is floored at `>=6.7.1` in `pixi.toml`.** `gcp-correction` 2.3.2
-  (build 2) requires `mctc-lib >= 0.5.1`; without the floor the solver falls
-  back to the ancient `xtb` 6.4.1 (the last release with no `mctc-lib`
-  dependency) instead of a build rebuilt against `mctc-lib` 0.5.x. xtb 6.7.1
-  build >=4 also fixes a Fortran format-string bug
+- **Psi4 has a pixi environment to itself** (`psi4`, beside `default`).
+  qm-pka only ever launches the `psi4` executable, so the two environments
+  are solved separately and share no versions. In one environment they
+  could not move: Psi4 after 1.10.0 is built against pybind11-abi 11 and
+  PySCF's xcfun against abi 4, which held Psi4 at 1.10.0 and libxc at 7.0.
+  `psi4_runner.psi4_executable` takes the `psi4` in the environment next to
+  the running interpreter's (`.pixi/envs/psi4`) before any on `PATH`, so the
+  locked one is not shadowed, and launches it with its own `bin` first on
+  `PATH`: Psi4 finds `mctc-gcp` there, and r2SCAN-3c fails without it.
+  `refine()` and `score()` look the executable up when they pick the driver,
+  so a Psi4 that is not installed stops the run instead of failing every
+  conformer in turn. Keep it that way round: don't `import psi4` in qm-pka.
+  Besides the ABI conflict, running Psi4 as a separate program is what keeps
+  qm-pka's license independent of Psi4's LGPL-3.0.
+- **`xtb` is floored at `>=6.7.1` in `pixi.toml`.** Pressure on `mctc-lib`
+  has made the solver fall back to the ancient `xtb` 6.4.1 (the last release
+  with no `mctc-lib` dependency) before; that was `gcp-correction` 2.3.2
+  (build 2), which now lives in the `psi4` environment. xtb 6.7.1 build >=4
+  also fixes a Fortran format-string bug
   ([xtb#1332](https://github.com/grimme-lab/xtb/issues/1332)).
 - **`crest` is pinned to `2.12.*`, not 3.x.** The CREST 3.x rewrite moved
   optimization/MD/MTD in-process, and on macOS its conformer search collapses

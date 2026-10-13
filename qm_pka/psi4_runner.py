@@ -11,7 +11,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -373,13 +375,14 @@ def _cavity_is_valid(
         + _pcm_block(solvent_model, solvent, geom, pcm_hydrogen_radius, area)
         + f"\n\nenergy('{_CAVITY_PROBE_METHOD}')\n"
     )
+    psi4 = psi4_executable()
     with _scratch_dir() as tmp:
         work_dir = Path(tmp)
         (work_dir / "input.dat").write_text(input_text)
         try:
             result = subprocess.run(
                 [
-                    "psi4",
+                    str(psi4),
                     str(work_dir / "input.dat"),
                     "-o",
                     str(work_dir / "output.dat"),
@@ -391,6 +394,7 @@ def _cavity_is_valid(
                     "2GB",
                 ],
                 cwd=work_dir,
+                env=_psi4_env(psi4),
                 capture_output=True,
                 text=True,
                 timeout=3600,
@@ -640,6 +644,41 @@ psi4.print_out(f'\\n=== FINAL ENERGY: {{E:.12f}} ===\\n')
 # ---------------------------------------------------------------------------
 
 
+def psi4_executable() -> Path:
+    """The psi4 to launch: this project's psi4 environment, else one on PATH.
+
+    Psi4 is a separate program with a pixi environment of its own, installed
+    beside the one this interpreter runs in (.pixi/envs/psi4 next to
+    .pixi/envs/default).  That one comes first because it is the locked one; a
+    psi4 on PATH is the fallback for installs that provide it some other way.
+
+    Raises if there is neither.  refine() and score() call this when they pick
+    the driver, so a missing Psi4 stops the run there instead of being recorded
+    as every conformer's own failure.
+    """
+    sibling = Path(sys.prefix).parent / "psi4" / "bin" / "psi4"
+    if sibling.is_file():
+        return sibling
+    on_path = shutil.which("psi4")
+    if on_path is None:
+        raise FileNotFoundError(
+            "No psi4 executable: install its environment with `pixi install -e psi4`, "
+            "or put psi4 on PATH."
+        )
+    return Path(on_path)
+
+
+def _psi4_env(psi4: Path) -> dict[str, str]:
+    """The environment to launch psi4 in: its own directory first on PATH.
+
+    Psi4 looks its helper programs up on PATH (mctc-gcp for the gCP term of the
+    3c composites, for one), and they are installed beside it, not in the
+    environment this process runs in.
+    """
+    path = os.pathsep.join(filter(None, [str(psi4.parent), os.environ.get("PATH")]))
+    return {**os.environ, "PATH": path}
+
+
 def _scratch_dir() -> tempfile.TemporaryDirectory[str]:
     """Scratch directory for one Psi4 job, cleaned up on ``with`` exit.
 
@@ -677,8 +716,9 @@ def _run_psi4(
     output_path = work_dir / "output.dat"
     input_path.write_text(input_text)
 
+    psi4 = psi4_executable()
     cmd = [
-        "psi4",
+        str(psi4),
         str(input_path),
         "-o",
         str(output_path),
@@ -694,6 +734,7 @@ def _run_psi4(
     result = subprocess.run(
         cmd,
         cwd=work_dir,
+        env=_psi4_env(psi4),
         capture_output=True,
         text=True,
         timeout=timeout,

@@ -22,6 +22,9 @@ def _get_driver(name: str) -> ModuleType:
     if name == "psi4":
         from qm_pka import psi4_runner
 
+        # Outside the per-conformer handlers, which would record a missing
+        # Psi4 as each conformer's own failure.
+        psi4_runner.psi4_executable()
         return psi4_runner
     if name == "pyscf":
         from qm_pka import pyscf_runner

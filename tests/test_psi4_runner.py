@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import os
+import sys
 import tempfile
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from qm_pka import psi4_runner
+from qm_pka import psi4_runner, refinement, scoring
 from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.psi4_runner import (
     _MODIFIED_BONDI_RADII,
@@ -17,6 +17,7 @@ from qm_pka.psi4_runner import (
     _pcm_block,
     _run_psi4,
     _scratch_dir,
+    psi4_executable,
 )
 from qm_pka.types import Geometry
 
@@ -153,7 +154,7 @@ class TestMemoryFlag:
     def test_memory_flag_present(
         self, isolated_tmpdir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+        monkeypatch.setattr(psi4_runner, "psi4_executable", lambda: tmp_path / "psi4")
         self._recording_psi4(tmp_path)
         with _scratch_dir() as tmp:
             _run_psi4("E = energy('scf')", Path(tmp), memory_gb=12.0)
@@ -166,7 +167,7 @@ class TestMemoryFlag:
         self, isolated_tmpdir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # Psi4 must never silently fall back to its own 500 MiB default.
-        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+        monkeypatch.setattr(psi4_runner, "psi4_executable", lambda: tmp_path / "psi4")
         self._recording_psi4(tmp_path)
         with _scratch_dir() as tmp:
             _run_psi4("E = energy('scf')", Path(tmp))
@@ -176,11 +177,71 @@ class TestMemoryFlag:
         self, isolated_tmpdir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # -s keeps psi4's binary scratch inside the dir we delete
-        monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+        monkeypatch.setattr(psi4_runner, "psi4_executable", lambda: tmp_path / "psi4")
         self._recording_psi4(tmp_path)
         with _scratch_dir() as tmp:
             _run_psi4("E = energy('scf')", Path(tmp))
             assert f"-s {tmp}" in (tmp_path / "argv.txt").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Which psi4 gets launched
+# ---------------------------------------------------------------------------
+class TestPsi4Executable:
+    """Psi4 has a pixi environment of its own, beside the one the tests run in."""
+
+    @staticmethod
+    def _psi4_in(env: Path, body: str = "") -> Path:
+        exe = env / "bin" / "psi4"
+        exe.parent.mkdir(parents=True)
+        exe.write_text(f"#!/bin/sh\n{body}\n")
+        exe.chmod(0o755)
+        return exe
+
+    @pytest.fixture()
+    def envs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+        """A directory of environments, with the interpreter placed in envs/default."""
+        envs = tmp_path / "envs"
+        monkeypatch.setattr(sys, "prefix", str(envs / "default"))
+        monkeypatch.setenv("PATH", str(tmp_path / "elsewhere" / "bin"))
+        return envs
+
+    def test_prefers_its_own_environment_to_path(self, envs: Path, tmp_path: Path) -> None:
+        # the locked Psi4 must not be shadowed by whatever else is on PATH
+        sibling = self._psi4_in(envs / "psi4")
+        self._psi4_in(tmp_path / "elsewhere")
+        assert psi4_executable() == sibling
+
+    def test_falls_back_to_path(self, envs: Path, tmp_path: Path) -> None:
+        on_path = self._psi4_in(tmp_path / "elsewhere")
+        assert psi4_executable() == on_path
+
+    def test_missing_psi4_says_how_to_install_it(self, envs: Path) -> None:
+        with pytest.raises(FileNotFoundError, match="pixi install -e psi4"):
+            psi4_executable()
+
+    def test_missing_psi4_stops_the_stage(self, envs: Path) -> None:
+        # refine() and score() wrap each conformer in a handler that records the
+        # failure and moves on; a Psi4 that is not installed must not get that far
+        with pytest.raises(FileNotFoundError):
+            refinement._get_driver("psi4")
+        with pytest.raises(FileNotFoundError):
+            scoring._get_driver("psi4")
+
+    def test_psi4_runs_with_its_own_bin_first_on_path(
+        self, envs: Path, tmp_path: Path, isolated_tmpdir: Path
+    ) -> None:
+        # Psi4 finds helpers such as mctc-gcp on PATH; they are installed beside it
+        exe = self._psi4_in(
+            envs / "psi4",
+            f'echo "$PATH" > {tmp_path}/path.txt\n'
+            'echo "=== FINAL ENERGY: -1.000000000000 ===" > "$3"',
+        )
+        with _scratch_dir() as tmp:
+            _run_psi4("E = energy('scf')", Path(tmp))
+        seen = (tmp_path / "path.txt").read_text().strip().split(":")
+        assert seen[0] == str(exe.parent)
+        assert str(tmp_path / "elsewhere" / "bin") in seen[1:]
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +277,7 @@ def test_run_psi4_rejects_a_suppressed_pcm_error(
             "Normally an error, this has been commuted to a warning via patch.\n"
         )
 
+    monkeypatch.setattr(psi4_runner, "psi4_executable", lambda: tmp_path / "psi4")
     monkeypatch.setattr("qm_pka.psi4_runner.subprocess.run", lambda *a, **k: _Result())
     (tmp_path / "output.dat").write_text("=== FINAL ENERGY: -1.0 ===")
     with pytest.raises(RuntimeError, match="invalid cavity"):
