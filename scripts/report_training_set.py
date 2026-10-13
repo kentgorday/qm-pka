@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from qm_pka.ensemble import load_ensemble
-from qm_pka.training_set import parse_pka_column
+from qm_pka.training_set import find_compound_dir, parse_pka_column
 
 HARTREE_TO_KCAL = 627.509
 RT_KCAL = 0.5924
@@ -97,9 +97,9 @@ def main() -> None:
 
     meta = {r["unique_ID"]: r for r in csv.DictReader(args.training_set.open())}
     paths = {
-        d.name.split("_", 1)[1]: d / "ensemble.json"
-        for d in sorted(args.output_root.glob("*/"))
-        if (d / "ensemble.json").exists()
+        uid: path
+        for uid in meta
+        if (path := find_compound_dir(args.output_root, uid) / "ensemble.json").exists()
     }
     for item in args.substitute:
         name, _, path = item.partition("=")

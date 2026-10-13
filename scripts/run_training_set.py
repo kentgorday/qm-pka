@@ -17,6 +17,10 @@ Usage:
 Resume after interruption:
     pixi run python scripts/run_training_set.py --resume ...
 
+Each subdirectory is named for the molecule's unique_ID, so --resume finds a
+molecule's earlier output wherever its row now sits in the CSV -- including
+output from older runs, whose directories carry a row-number prefix.
+
 --resume skips finished molecules outright and, for an unfinished one, picks up
 at the first stage that has no checkpoint on disk -- a molecule killed during
 scoring reuses its sampling and refinement output rather than redoing days of
@@ -35,6 +39,7 @@ from pathlib import Path
 
 from qm_pka.config import DEFAULT_MEMORY_GB, load_config
 from qm_pka.pipeline import run_pipeline
+from qm_pka.training_set import compound_dir_name, find_compound_dir
 
 
 def make_toml(smi: str, output_dir: Path, driver: str, threads: int, memory_gb: float) -> str:
@@ -76,19 +81,16 @@ output_dir = "{output_dir}"
 '''
 
 
-def safe_name(smi: str, fallback: str) -> str:
-    """Sanitize a SMILES string into a filesystem-safe directory name."""
-    name = "".join(c if c.isalnum() else "_" for c in smi)[:50]
-    return name or fallback
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run pKa pipeline over a training-set CSV")
     parser.add_argument(
         "--training-set",
         type=Path,
         default=Path("training_set.csv"),
-        help="CSV with at least a SMILES column (and optionally unique_ID)",
+        help=(
+            "CSV with at least a SMILES column. Output directories are named for "
+            "the unique_ID column; without one, for the row number (mol_N)"
+        ),
     )
     parser.add_argument(
         "--output-root",
@@ -152,13 +154,22 @@ def main() -> None:
     if args.limit:
         rows = rows[: args.limit]
 
+    uids = [row.get("unique_ID") or f"mol_{i}" for i, row in enumerate(rows, start=1)]
+    by_dir_name: dict[str, list[str]] = {}
+    for uid in uids:
+        by_dir_name.setdefault(compound_dir_name(uid), []).append(uid)
+    clashes = [ids for ids in by_dir_name.values() if len(ids) > 1]
+    if clashes:
+        listed = "; ".join(", ".join(ids) for ids in clashes)
+        print(f"Error: rows would share an output directory: {listed}", file=sys.stderr)
+        sys.exit(1)
+
     log.info(f"Running pipeline on {len(rows)} molecules")
 
     n_ok = n_skip = n_fail = 0
-    for i, row in enumerate(rows, start=1):
+    for i, (row, uid) in enumerate(zip(rows, uids, strict=True), start=1):
         smi = row["SMILES"]
-        uid = row.get("unique_ID") or f"mol_{i}"
-        compound_dir = args.output_root / f"{i:03d}_{safe_name(uid, f'mol_{i}')}"
+        compound_dir = find_compound_dir(args.output_root, uid)
         ensemble_json = compound_dir / "ensemble.json"
 
         if args.resume and ensemble_json.exists():
