@@ -229,9 +229,9 @@ def _patch_einsum_path_for_numpy24() -> None:
     fine and density-fitted *gradients* are not -- the auxiliary term in
     ``pyscf/df/grad/rhf.py`` contracts ``'xpq,mp,nq->mnxp'``.
 
-    Fixed upstream in 2.12.0 by commit 4e77c7e, four lines in one file. We are
-    pinned below 2.13 because 2.13 changes the D4 composite dispatch (see
-    ``_register_d4_composites``), so the fix is applied here instead.
+    Fixed upstream in 2.12.0 by commit 4e77c7e, four lines in one file. The
+    locked osx-arm64 environment is still on 2.11, so the fix is applied here
+    instead.
 
     This replaces ``numpy_helper._einsum_path``, not ``numpy_helper.einsum``.
     ``einsum`` reads ``_einsum_path`` from its module globals on every call, so

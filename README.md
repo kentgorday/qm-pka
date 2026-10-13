@@ -234,7 +234,7 @@ The set of things that look weird and aren't. Read before "fixing":
   exchange-correlation (libxc 466) with VV10 off and D4 on; PySCF's native
   `wb97x-d4` means the original 2008 wB97X (libxc 464) plus D4. How the dftd4
   parameter name reaches PySCF depends on its dispersion dispatch, which PySCF
-  2.13.1 rewrote (PR #3209), so `_set_method` probes for it: on older PySCF,
+  2.13.1 rewrote (PR #3209), so `_d4_colon_syntax` probes for it: on older PySCF,
   `_register_d4_composites` registers internal XC names in PySCF's dispatch
   tables; from 2.13.1 nothing is registered and the name goes in
   `mf.disp = "d4:<name>"` (registering there would be wrong — XC_MAP is keyed
