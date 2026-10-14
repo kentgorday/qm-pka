@@ -528,3 +528,67 @@ class TestDensityFittingIsOn:
         # order decides: PySCF refuses to build solvent gradients when density
         # fitting was attached outside the solvent wrapper.
         mf.nuc_grad_method()
+
+    def test_short_fitting_sets_get_a_diffuse_s(self) -> None:
+        """Only for AUX_DIFFUSE_S's elements; the others keep the library shells."""
+        from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS
+        from qm_pka.pyscf_runner import _auxbasis
+
+        aux = _auxbasis(("C", "S", "H", "H", "Br"))
+        assert isinstance(aux, dict)
+        assert set(aux) == {"C", "S", "H", "Br"}
+        for elem in ("S", "Br"):
+            assert aux[elem] == [*gto.basis.load(AUXBASIS, elem), [0, [AUX_DIFFUSE_S[elem], 1.0]]]
+        for elem in ("C", "H"):
+            assert aux[elem] == gto.basis.load(AUXBASIS, elem)
+
+    def test_the_diffuse_exponents_follow_the_rule(self) -> None:
+        """Each is the set's own smallest s exponent for that element, over 2.5."""
+        from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS
+
+        for elem, exponent in AUX_DIFFUSE_S.items():
+            assert exponent == round(_smallest_s(AUXBASIS, elem) / 2.5, 3), elem
+
+    def test_no_other_element_has_so_short_an_s_series(self) -> None:
+        """Wherever def2-QZVPPD exists, a set that stops above 0.2 is one we extend.
+
+        Hydrogen and the noble gases stop there too and are left alone: nothing
+        here computes a hydride ion, and the noble gases form no anions.
+        """
+        from pyscf.lib.exceptions import BasisNotFoundError
+
+        from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS
+
+        short = set()
+        for z in range(1, 87):
+            elem = gto.elements.ELEMENTS[z]
+            try:
+                gto.basis.load("def2-qzvppd", elem)
+            except BasisNotFoundError:  # the lanthanides
+                continue
+            if _smallest_s(AUXBASIS, elem) > 0.2:
+                short.add(elem)
+        assert short - {"H", "He", "Ar", "Kr", "Xe"} == set(AUX_DIFFUSE_S)
+
+    @pytest.mark.slow
+    def test_chloride_is_fitted_as_well_as_anything_else(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """With the library set alone this is -0.27 kcal/mol."""
+        from pyscf.scf import hf
+
+        chloride = Geometry(symbols=("Cl",), coords=np.zeros((1, 3)))
+        _mol, mf = _build_mf(chloride, -1, "PBE0", "def2-TZVPPD", threads=1, memory_gb=1.0)
+        fitted = mf.kernel()
+
+        monkeypatch.setattr(hf.SCF, "density_fit", lambda self, *args, **kwargs: self)
+        _mol, mf = _build_mf(chloride, -1, "PBE0", "def2-TZVPPD", threads=1, memory_gb=1.0)
+        assert getattr(mf, "with_df", None) is None
+        conventional = mf.kernel()
+
+        assert abs(fitted - conventional) * 627.5095 < 0.02
+
+
+def _smallest_s(basis: str, elem: str) -> float:
+    shells = gto.basis.load(basis, elem)
+    return float(min(row[0] for shell in shells if shell[0] == 0 for row in shell[1:]))

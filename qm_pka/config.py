@@ -41,6 +41,64 @@ from typing import Any, Literal
 # there is nothing to buy by going higher.
 DEFAULT_MEMORY_GB = 4.0
 
+# Coulomb/exchange fitting basis for density-fitted SCF, the same on both
+# backends.  Weigend's universal JK set is what Psi4 blends by default for the
+# def2 family and for vDZP -- its output reports "SCF Algorithm Type is DF" and
+# "Blend: DEF2-UNIVERSAL-JKFIT" -- so PySCF is told to use it too rather than
+# silently differ.  It was optimized for def2-QZVPP and is the one JK set for
+# every def2 basis; there is no diffuse-augmented version for def2-QZVPPD.
+#
+# Accuracy, measured against conventional four-centre integrals at
+# wB97M-V/def2-QZVPPD: a few hundredths of a kcal/mol on absolute energies
+# (H2O -0.022, OH- -0.014, formic acid -0.023, formate -0.011), and the errors
+# largely cancel in a difference -- formic acid's deprotonation energy moves
+# 0.012 kcal/mol, which is 0.009 pKa.
+AUXBASIS = "def2-universal-jkfit"
+
+# One more s primitive for AUXBASIS on each atom of these elements (exponent).
+#
+# The set was optimized on neutral monohydrides against the exchange energy, and
+# for these elements its s functions stop at an exponent of 0.24-0.29 where
+# those of C-F, Si, Ge and Te reach 0.10-0.16.  An anion whose charge sits on
+# one of them with only hydrogens around it has a tail the set cannot fit.  At
+# wB97M-V/def2-QZVPPD in the gas phase PySCF is off by -0.29 kcal/mol for Cl-,
+# -0.38 for Br-, -0.54 for I-, -0.25 for HS-, -0.40 for HSe- and -0.23 for
+# AsH2-, about half that in water, and it cancels in nothing useful.  The acid
+# is fitted well (HCl -0.01), so a pKa keeps the error; the solvent halves it,
+# so a solvation energy keeps half; and a neighbour lends its own fitting
+# functions, so it moves with the geometry -- Cl- with one water hydrogen-bonded
+# to it is off by -0.06.  Nor do the backends agree on it: they fit long-range
+# exchange differently, and Psi4's errors for those six are +0.17 to +0.35.
+#
+# The added exponent is the element's smallest s exponent in the set divided by
+# 2.5, where a scan found a broad optimum (anything from /2 to /3 leaves under
+# 0.03 kcal/mol in PySCF).  With it PySCF is within 0.012 kcal/mol of
+# conventional integrals on those six and, over 20 acid/base pairs containing
+# these elements, within 0.012 on the deprotonation energy in gas or water,
+# against 0.53 without.  Psi4 is within 0.054 on those six: what it has left is
+# on As, Se and Br, whose p functions stop short as well (0.19-0.20 against 0.09
+# for P, S, Cl and I), and a p primitive there would bring it to 0.015.
+#
+# In PySCF no other element with a def2 diffuse basis needs one.  Sb, Bi, Te,
+# Po, At, Ge, Sn and Pb already reach 0.11 or below, and their hydride anions'
+# deprotonation energies are fitted to 0.004 kcal/mol.  Psi4 has the same
+# short-p remainder on F, Ge and Te, whose p functions also stop at 0.18-0.20:
+# it is off by +0.06 kcal/mol on F-, TeH- and GeH3- (PySCF -0.01 to -0.02) and
+# by +0.09 on the deprotonation energies of HF and H2Te.  That is under 0.1
+# kcal/mol, but more than Psi4 has left on the six above, and a p primitive
+# would be the fix there too.  Hydrogen and lithium are left alone although a
+# bare H- is off by -1.8 kcal/mol and Li- by -0.31 in the gas phase: hydridic
+# anions (BH4-, AlH4-) are fine, and nothing here computes a hydride or lithide.
+AUX_DIFFUSE_S: dict[str, float] = {
+    "P": 0.106,
+    "S": 0.112,
+    "Cl": 0.116,
+    "As": 0.100,
+    "Se": 0.106,
+    "Br": 0.108,
+    "I": 0.096,
+}
+
 log = logging.getLogger(__name__)
 
 Solvation = Literal["none", "optimize", "single_point"]

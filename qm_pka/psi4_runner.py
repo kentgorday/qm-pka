@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from qm_pka.config import DEFAULT_MEMORY_GB
+from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS, DEFAULT_MEMORY_GB
 from qm_pka.types import Geometry
 from qm_pka.xyz_io import read_xyz
 
@@ -272,6 +272,10 @@ def _options_block(
     return "\n".join(opts)
 
 
+# The fitting set of the elements in AUX_DIFFUSE_S, as Psi4 names it in its output.
+_DF_BASIS_NAME = "def2-universal-jkfit-plus-s"
+
+
 def _bse_basis_block(basis: str, geom: Geometry) -> str:
     """If `basis` should be loaded from basis-set-exchange, return a
     Psi4 input snippet that registers it via `basis_helper`. Otherwise "".
@@ -287,6 +291,35 @@ def _bse_basis_block(basis: str, geom: Geometry) -> str:
     elements = sorted(set(geom.symbols))
     psi4_str = bse.get_basis("Grimme vDZP", fmt="psi4", elements=elements)
     return f'\nbasis_helper("""\n{psi4_str}\n""", name="vDZP", set_option=True)\n'
+
+
+def _df_basis_block(geom: Geometry) -> str:
+    """A Psi4 input snippet that gives the fitting basis its extra s primitives.
+
+    "" unless `geom` holds an element of AUX_DIFFUSE_S.  Psi4 cannot add a
+    function to a library set, so those elements get a set of their own --
+    AUXBASIS as basis-set-exchange has it, which is what PySCF and Psi4 ship,
+    plus the primitive -- and every other atom is assigned AUXBASIS by name,
+    which is what Psi4 picks for it anyway with a def2 basis or vDZP.
+    """
+    elements = sorted(AUX_DIFFUSE_S.keys() & set(geom.symbols))
+    if not elements:
+        return ""
+    import basis_set_exchange as bse
+
+    lines = [f"assign {AUXBASIS}"]
+    lines += [f"assign {elem} {_DF_BASIS_NAME}" for elem in elements]
+    lines += [f"[ {_DF_BASIS_NAME} ]", "spherical", "****"]
+    for elem in elements:
+        gbs = bse.get_basis(AUXBASIS, fmt="psi4", elements=[elem], header=False)
+        # "spherical", then the element's shells between two "****" lines
+        shells = gbs.split("****")[1].strip()
+        lines += [shells, "S    1   1.00", f"      {AUX_DIFFUSE_S[elem]:.10f}  1.0000000", "****"]
+    block = "\n".join(lines)
+    return (
+        f'\nbasis_helper("""\n{block}\n""", name="{_DF_BASIS_NAME}", '
+        'key="df_basis_scf", set_option=True)\n'
+    )
 
 
 def _pcm_block(
@@ -484,6 +517,7 @@ set {{
         )
 
     input_text += _bse_basis_block(basis, geom)
+    input_text += _df_basis_block(geom)
 
     input_text += f"""
 E = energy('{method}')
@@ -539,6 +573,7 @@ set {{
         )
 
     input_text += _bse_basis_block(basis, geom)
+    input_text += _df_basis_block(geom)
 
     # Wrap optimize() so that a non-convergence exception still yields a
     # geometry and energy on disk (from the last optimizer step).  Two failure
@@ -615,6 +650,7 @@ set {{
         )
 
     input_text += _bse_basis_block(basis, geom)
+    input_text += _df_basis_block(geom)
 
     input_text += f"""
 E, wfn = frequency('{method}', return_wfn=True)

@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from collections.abc import Iterable
 from typing import Any
 
 import numpy as np
 
-from qm_pka.config import DEFAULT_MEMORY_GB
+from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS, DEFAULT_MEMORY_GB
 from qm_pka.geometric_logging import geometric_quiet
 from qm_pka.types import Geometry
 
@@ -32,27 +33,6 @@ ANG_TO_BOHR = 1.0 / BOHR_TO_ANG
 
 # Functionals that include VV10 nonlocal correlation
 _VV10_XC = {"wb97m-v", "wb97x-v", "b97m-v"}
-
-# Coulomb/exchange fitting basis for density-fitted SCF.  Weigend's universal
-# JK set, which is also what Psi4 blends by default -- a Psi4 run of ours
-# reports "SCF Algorithm Type is DF" and "Blend: DEF2-UNIVERSAL-JKFIT" -- so
-# turning it on here makes the two backends agree on the integral treatment
-# rather than silently differ.  It is the recommended fit for wB97X-3c/vDZP
-# (ORCA calls it def2/J) and, being derived from def2-QZVPP, matches the
-# def2-QZVPPD scoring basis too; there is no diffuse-augmented JK set to use
-# instead, and none is needed.
-#
-# Accuracy, measured against conventional four-centre integrals at
-# wB97M-V/def2-QZVPPD: a few hundredths of a kcal/mol on absolute energies
-# (H2O -0.022, OH- -0.014, formic acid -0.023, formate -0.011), and the errors
-# largely cancel in a difference -- formic acid's deprotonation energy moves
-# 0.012 kcal/mol, which is 0.009 pKa.
-#
-# The exception is heavier halide anions, where the fit is worth a few tenths:
-# F- -0.008 but Cl- -0.286 and Br- -0.384 kcal/mol.  These mostly cancel too,
-# since both sides of a pKa carry the same halogen, but a reaction that makes
-# or breaks a bare halide would not enjoy that cancellation.
-_AUXBASIS = "def2-universal-jkfit"
 
 # ---------------------------------------------------------------------------
 # wB97X-V + D4 composite methods
@@ -421,6 +401,27 @@ def _resolve_basis(
     return basis, None
 
 
+def _auxbasis(symbols: Iterable[str]) -> str | dict[str, Any]:
+    """The fitting basis for a molecule of these elements, as density_fit takes it.
+
+    AUXBASIS by name, unless an element is in AUX_DIFFUSE_S: then every element's
+    shells are spelled out so that those can carry their extra s primitive.
+    """
+    elements = sorted(set(symbols))
+    if AUX_DIFFUSE_S.keys().isdisjoint(elements):
+        return AUXBASIS
+
+    from pyscf import gto
+
+    aux: dict[str, Any] = {}
+    for elem in elements:
+        shells = list(gto.basis.load(AUXBASIS, elem))
+        if elem in AUX_DIFFUSE_S:
+            shells.append([0, [AUX_DIFFUSE_S[elem], 1.0]])
+        aux[elem] = shells
+    return aux
+
+
 def _build_mf(
     geom: Geometry,
     charge: int,
@@ -478,7 +479,7 @@ def _build_mf(
     # PySCF raises "Gradients of solvent are not computed. Solvent must be
     # applied after density fit" if the wrapper is built around a conventional
     # mean field and density fitting is attached underneath it afterwards.
-    mf = mf.density_fit(auxbasis=_AUXBASIS)
+    mf = mf.density_fit(auxbasis=_auxbasis(geom.symbols))
 
     # XC functional, plus VV10/dispersion settings for the D4 composites.
     _set_method(mf, method)

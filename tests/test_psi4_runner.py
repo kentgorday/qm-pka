@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -14,6 +15,7 @@ from qm_pka.config import DEFAULT_MEMORY_GB
 from qm_pka.psi4_runner import (
     _MODIFIED_BONDI_RADII,
     _PCM_RADII_SCALING,
+    _df_basis_block,
     _pcm_block,
     _run_psi4,
     _scratch_dir,
@@ -82,6 +84,84 @@ class TestPCMBlock:
     def test_full_periodic_table_coverage(self) -> None:
         # Parity with PySCF: every element PySCF defines must be present here.
         assert len(_MODIFIED_BONDI_RADII) == 103  # H..Lr
+
+
+def _thioacetate() -> Geometry:
+    return Geometry(
+        symbols=("C", "C", "O", "S", "H", "H", "H"),
+        coords=np.array(
+            [
+                [0.0, 0.0, 0.0],
+                [1.52, 0.0, 0.0],
+                [2.13, 1.07, 0.0],
+                [2.36, -1.50, 0.0],
+                [-0.38, 1.02, 0.0],
+                [-0.38, -0.51, 0.89],
+                [-0.38, -0.51, -0.89],
+            ]
+        ),
+    )
+
+
+def _gbs_shells(block: str, elem: str) -> list[list[object]]:
+    """One element's shells from a Psi4 basis block, in PySCF's [l, [exp, coef], ...] form."""
+    # An element's entry opens with "Cl     0"; a shell with "S    6   1.00".
+    entry = re.split(rf"(?m)^{elem}\s+0\s*$", block)[1].split("****", 1)[0]
+    lines = entry.strip().splitlines()
+    shells: list[list[object]] = []
+    while lines:
+        letter, n_prim, _scale = lines.pop(0).split()
+        rows = [
+            [float(x.replace("D", "E")) for x in lines.pop(0).split()] for _ in range(int(n_prim))
+        ]
+        shells.append(["SPDFGHI".index(letter), *rows])
+    return shells
+
+
+class TestFittingBasisBlock:
+    """The extra s primitive of config.AUX_DIFFUSE_S, as Psi4 is told about it."""
+
+    def test_nothing_to_add_means_no_block(self) -> None:
+        assert _df_basis_block(_water()) == ""
+
+    def test_only_those_elements_get_a_set_of_their_own(self) -> None:
+        block = _df_basis_block(_thioacetate())
+        assert 'key="df_basis_scf"' in block
+        assigns = [line for line in block.splitlines() if line.startswith("assign")]
+        assert assigns == ["assign def2-universal-jkfit", "assign S def2-universal-jkfit-plus-s"]
+
+    def test_carries_the_functions_pyscf_fits_with(self) -> None:
+        # Psi4's shells come from basis-set-exchange and PySCF's from its own
+        # library; both backends must end up with the same fit, primitive included.
+        pytest.importorskip("pyscf")
+        from qm_pka.config import AUX_DIFFUSE_S
+        from qm_pka.pyscf_runner import _auxbasis
+
+        elements = tuple(AUX_DIFFUSE_S)
+        geom = Geometry(symbols=elements, coords=np.zeros((len(elements), 3)))
+        block = _df_basis_block(geom)
+        pyscf_aux = _auxbasis(elements)
+        assert isinstance(pyscf_aux, dict)
+        for elem in elements:
+            assert _gbs_shells(block, elem) == pyscf_aux[elem], elem
+
+    def test_every_kind_of_job_carries_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        inputs: list[str] = []
+
+        def fake_run(input_text: str, work_dir: Path, **_kwargs: object) -> str:
+            inputs.append(input_text)
+            (work_dir / "optimized.xyz").write_text("1\n\nCl 0.0 0.0 0.0\n")
+            (work_dir / "frequencies.dat").write_text("")
+            return "=== FINAL ENERGY: -1.000000000000 ===\n=== CONVERGED: 1 ===\n"
+
+        monkeypatch.setattr(psi4_runner, "_run_psi4", fake_run)
+        chloride = Geometry(symbols=("Cl",), coords=np.zeros((1, 3)))
+        psi4_runner.single_point(chloride, -1, "PBE0", "def2-SVP")
+        psi4_runner.optimize(chloride, -1, "PBE0", "def2-SVP")
+        psi4_runner.frequencies(chloride, -1, "PBE0", "def2-SVP")
+        assert len(inputs) == 3
+        for text in inputs:
+            assert _df_basis_block(chloride) in text
 
 
 @pytest.fixture
