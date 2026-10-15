@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from rdkit import Chem
 
-from qm_pka.ensemble import (
+from tautomator.ensemble import (
     HARTREE_TO_KCAL,
     _conformer_multiplicity,
     assign_weights,
@@ -19,7 +19,7 @@ from qm_pka.ensemble import (
     load_ensemble,
     serialize_ensemble,
 )
-from qm_pka.types import (
+from tautomator.types import (
     ChargeState,
     Conformer,
     Ensemble,

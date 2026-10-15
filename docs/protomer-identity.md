@@ -6,7 +6,7 @@ that happens to a microstate, the pipeline computes the same species twice —
 two conformer ensembles, two sets of DFT energies, and a partition function
 that double-counts it.
 
-`protomer_key` in `qm_pka/rdkit_utils.py` is the identity used for microstates
+`protomer_key` in `tautomator/rdkit_utils.py` is the identity used for microstates
 in the RDKit-first path. It gives one key per species, whichever Lewis
 structure was written for it.
 
@@ -122,7 +122,7 @@ just the element sequence -- two different orderings can share one sequence.
 
 ## When a proton moves during minimisation
 
-The key above identifies a species from a SMILES. `qm_pka/protomer_geometry.py`
+The key above identifies a species from a SMILES. `tautomator/protomer_geometry.py`
 identifies one from *coordinates*, which is what catches a conformer whose proton
 migrated between heavy atoms while xTB or DFT was minimising it. It is not rare:
 across the first training batch about a quarter of conformers at both stages were

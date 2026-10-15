@@ -26,8 +26,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from qm_pka.types import Geometry
-from qm_pka.xyz_io import read_multi_xyz, write_xyz
+from tautomator.types import Geometry
+from tautomator.xyz_io import read_multi_xyz, write_xyz
 
 
 def optimize(

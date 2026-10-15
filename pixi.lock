@@ -6507,11 +6507,6 @@ packages:
   purls: []
   size: 516376
   timestamp: 1720814307311
-- pypi: ./
-  name: qm-pka
-  version: 0.1.0
-  sha256: 466312144cafe2f9bb6a4351e1303471d02a099a1456296cfb3a5cf5e7bbcd25
-  requires_python: '>=3.13'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/rdkit-2025.09.6-py313h66a1ddb_1.conda
   sha256: ab3f768f83a8a1b73d6b2da4f9452074b13faaebc077a0abac91cfe00329b914
   md5: c314bf18262cfb441a219ae1fa5bcef3
@@ -7025,6 +7020,11 @@ packages:
   - pkg:pypi/sympy?source=hash-mapping
   size: 4661767
   timestamp: 1771952371059
+- pypi: ./
+  name: tautomator
+  version: 0.1.0
+  sha256: 845013ce4b34df578d458f62112acf63b062ab25c4cb63605b786d349d95f429
+  requires_python: '>=3.13'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/tbb-2023.1.0-haa8c3ee_2.conda
   sha256: 5e47c01ea6c2bea041b78b4e45b3135b80bfc015533ec44e4c2d2326a755f8ba
   md5: f805909f478c179e230baf7bd5878e26

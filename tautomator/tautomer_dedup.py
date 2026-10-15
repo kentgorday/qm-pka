@@ -7,7 +7,7 @@ tautomer (possibly different conformers).
 
 `assign_protons` is the *sole* geometry-to-hydrogen-assignment primitive.
 Everything downstream -- the approach-2 fingerprint written at sampling and
-the migration check that reads it back in `qm_pka.protomer_geometry` -- goes
+the migration check that reads it back in `tautomator.protomer_geometry` -- goes
 through it. Two implementations of "which atom owns this H" is not a
 theoretical hazard: an earlier element-cutoff version and this one disagree on
 a bridging hydrogen (C-H 1.28 A, O-H 1.20 A gives (1,0) against (0,1)), and a
@@ -23,7 +23,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from qm_pka.types import Geometry
+from tautomator.types import Geometry
 
 # A hydrogen further than this from every heavy atom has left the molecule.
 # The longest genuine X-H bond in the reference batch is S-H at 1.355 A; the

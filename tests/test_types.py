@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from qm_pka.types import (
+from tautomator.types import (
     ChargeState,
     Conformer,
     Ensemble,

@@ -6,7 +6,7 @@ from typing import ClassVar
 import numpy as np
 import pytest
 
-from qm_pka.conformer_symmetry import (
+from tautomator.conformer_symmetry import (
     DEFAULT_RTHR,
     MAX_MAPPINGS,
     _candidate_mappings,
@@ -16,9 +16,9 @@ from qm_pka.conformer_symmetry import (
     effective_energy_offset,
     symmetry_number,
 )
-from qm_pka.ensemble import HARTREE_TO_KCAL
-from qm_pka.sampling import _filter_by_energy_window
-from qm_pka.types import Conformer, Geometry
+from tautomator.ensemble import HARTREE_TO_KCAL
+from tautomator.sampling import _filter_by_energy_window
+from tautomator.types import Conformer, Geometry
 
 # Staggered methylammonium, C3v, from a wB97M-V/def2-QZVPPD optimization.
 # Atom order is H C H H N H H H: methyl hydrogens 0/2/3, ammonium 5/6/7.
@@ -269,12 +269,12 @@ class TestTruncationIsReported:
     """
 
     def test_warns_when_the_ceiling_is_reached(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="qm_pka.conformer_symmetry"):
+        with caplog.at_level(logging.WARNING, logger="tautomator.conformer_symmetry"):
             _candidate_mappings(METHYLAMMONIUM, METHYLAMMONIUM, METHYLAMMONIUM_SYMBOLS, limit=2)
         assert "truncated" in caplog.text
 
     def test_silent_when_it_is_not(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="qm_pka.conformer_symmetry"):
+        with caplog.at_level(logging.WARNING, logger="tautomator.conformer_symmetry"):
             maps = _candidate_mappings(METHYLAMMONIUM, METHYLAMMONIUM, METHYLAMMONIUM_SYMBOLS)
         assert len(maps) < MAX_MAPPINGS
         assert caplog.text == ""

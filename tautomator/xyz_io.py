@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from qm_pka.types import Conformer, Geometry
+from tautomator.types import Conformer, Geometry
 
 
 def read_xyz(path: Path) -> Geometry:

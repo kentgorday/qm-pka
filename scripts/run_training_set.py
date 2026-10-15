@@ -25,7 +25,7 @@ output from older runs, whose directories carry a row-number prefix.
 at the first stage that has no checkpoint on disk -- a molecule killed during
 scoring reuses its sampling and refinement output rather than redoing days of
 DFT.  Note that only the molecule's SMILES is validated against the checkpoint;
-see _find_resume_point in qm_pka/pipeline.py.
+see _find_resume_point in tautomator/pipeline.py.
 """
 
 from __future__ import annotations
@@ -37,9 +37,9 @@ import sys
 import traceback
 from pathlib import Path
 
-from qm_pka.config import DEFAULT_MEMORY_GB, PROTOCOLS, load_config
-from qm_pka.pipeline import run_pipeline
-from qm_pka.training_set import compound_dir_name, find_compound_dir
+from tautomator.config import DEFAULT_MEMORY_GB, PROTOCOLS, load_config
+from tautomator.pipeline import run_pipeline
+from tautomator.training_set import compound_dir_name, find_compound_dir
 
 
 def make_toml(
@@ -56,7 +56,7 @@ def make_toml(
     the molecule cannot reach -2) flow through harmlessly.
 
     ``protocol`` picks every level of theory and energy window (see PROTOCOLS in
-    qm_pka/config.py); ``driver`` runs the DFT -- scoring always, and refinement
+    tautomator/config.py); ``driver`` runs the DFT -- scoring always, and refinement
     too unless the protocol refines with OrbMol.  Solvation is the protocol's
     business rather than this script's: it knows that PySCF can minimize in
     implicit solvent and Psi4 cannot, and that OrbMol has no implicit solvent

@@ -1,6 +1,6 @@
 """Compare predicted and experimental pKas for a training-set run.
 
-Transitions come from `qm_pka.training_set.parse_pka_column`, which reads them
+Transitions come from `tautomator.training_set.parse_pka_column`, which reads them
 off the experimental label. Pairing values with transitions positionally
 mis-assigns the two entries that mix `pKa` and `pKaH` labels.
 
@@ -17,8 +17,8 @@ from pathlib import Path
 
 import numpy as np
 
-from qm_pka.ensemble import load_ensemble
-from qm_pka.training_set import find_compound_dir, parse_pka_column
+from tautomator.ensemble import load_ensemble
+from tautomator.training_set import find_compound_dir, parse_pka_column
 
 HARTREE_TO_KCAL = 627.509
 RT_KCAL = 0.5924

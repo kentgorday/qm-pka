@@ -15,18 +15,18 @@ from __future__ import annotations
 
 import logging
 
-from qm_pka.charge_enumeration import charge_separated_variants, enumerate_charge_state
-from qm_pka.conformer_symmetry import DEFAULT_ETHR as CREGEN_ETHR
-from qm_pka.conformer_symmetry import effective_energy_offset
-from qm_pka.crest_runner import (
+from tautomator.charge_enumeration import charge_separated_variants, enumerate_charge_state
+from tautomator.conformer_symmetry import DEFAULT_ETHR as CREGEN_ETHR
+from tautomator.conformer_symmetry import effective_energy_offset
+from tautomator.crest_runner import (
     conformer_search,
     deprotonate,
     protonate,
     tautomerize,
 )
-from qm_pka.ensemble import HARTREE_TO_KCAL, deduplicate_charge_state, deduplicate_conformers
-from qm_pka.protomer_geometry import repair_migrated_conformers
-from qm_pka.rdkit_utils import (
+from tautomator.ensemble import HARTREE_TO_KCAL, deduplicate_charge_state, deduplicate_conformers
+from tautomator.protomer_geometry import repair_migrated_conformers
+from tautomator.rdkit_utils import (
     canonical_smiles,
     deduplicate_protomers,
     enumerate_tautomers,
@@ -34,15 +34,15 @@ from qm_pka.rdkit_utils import (
     smiles_to_3d,
     validate_input_smiles,
 )
-from qm_pka.stereo import enumerate_and_deduplicate
-from qm_pka.tautomer_dedup import (
+from tautomator.stereo import enumerate_and_deduplicate
+from tautomator.tautomer_dedup import (
     DETACHED_DISTANCE,
     assign_protons,
     deduplicate_tautomers,
     heavy_components,
 )
-from qm_pka.thermo import quasi_rrho_free_energy
-from qm_pka.types import (
+from tautomator.thermo import quasi_rrho_free_energy
+from tautomator.types import (
     ChargeState,
     Conformer,
     Ensemble,
@@ -50,7 +50,7 @@ from qm_pka.types import (
     Geometry,
     Microstate,
 )
-from qm_pka.xtb_runner import frequencies, optimize, single_point
+from tautomator.xtb_runner import frequencies, optimize, single_point
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def _dissociated(geom: Geometry) -> str | None:
     structure and reports success. `repair_migrated_conformers` catches these
     anyway, but it runs after the search, so the wasted time is already spent.
 
-    Both checks reuse the thresholds already in `qm_pka.tautomer_dedup` and
+    Both checks reuse the thresholds already in `tautomator.tautomer_dedup` and
     introduce none: connectivity from `heavy_components`, and the hydrogen's
     distance to the nearest heavy atom from `assign_protons`.
     """

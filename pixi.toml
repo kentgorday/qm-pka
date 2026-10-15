@@ -1,6 +1,6 @@
 [workspace]
 channels = ["conda-forge"]
-name = "qm-pka"
+name = "tautomator"
 platforms = ["linux-64", "osx-arm64"]
 version = "0.1.0"
 
@@ -14,10 +14,10 @@ version = "0.1.0"
 macos = "15.5"
 
 [tasks]
-lint = "ruff check qm_pka/ tests/ scripts/"
-format = "ruff format qm_pka/ tests/ scripts/"
-format-check = "ruff format --check qm_pka/ tests/ scripts/"
-typecheck = "mypy qm_pka/ tests/ scripts/"
+lint = "ruff check tautomator/ tests/ scripts/"
+format = "ruff format tautomator/ tests/ scripts/"
+format-check = "ruff format --check tautomator/ tests/ scripts/"
+typecheck = "mypy tautomator/ tests/ scripts/"
 check = { depends-on = ["lint", "format-check", "typecheck"] }
 
 [dependencies]
@@ -90,14 +90,14 @@ ase = ">=3.25,<4"
 libblas = { version = "*", build = "*_newaccelerate" }
 
 [pypi-dependencies]
-qm-pka = { path = ".", editable = true }
+tautomator = { path = ".", editable = true }
 ruff = ">=0.11,<1"
 orb-models = ">=0.7.0,<0.8"
 
 [pypi-options.dependency-overrides]
 dm-tree = ">=0.1.8"
 
-# Psi4 has an environment to itself.  qm_pka never imports it: psi4_runner
+# Psi4 has an environment to itself.  tautomator never imports it: psi4_runner
 # writes an input deck, launches the `psi4` executable from this environment
 # and reads the output back, so nothing here has to agree with the versions in
 # the default environment.  They could not agree: Psi4 after 1.10.0 is built

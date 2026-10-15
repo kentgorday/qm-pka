@@ -4,7 +4,7 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from qm_pka.charge_enumeration import (
+from tautomator.charge_enumeration import (
     _DEPROTONATION_SMARTS,
     _PROTONATION_SMARTS,
     charge_separated_variants,
@@ -12,7 +12,7 @@ from qm_pka.charge_enumeration import (
     enumerate_charge_state,
     protonate_all_sites,
 )
-from qm_pka.rdkit_utils import canonical_smiles, deduplicate_protomers, get_formal_charge
+from tautomator.rdkit_utils import canonical_smiles, deduplicate_protomers, get_formal_charge
 
 
 class TestDeprotonateAllSites:

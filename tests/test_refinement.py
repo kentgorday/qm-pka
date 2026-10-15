@@ -13,10 +13,10 @@ from typing import Any
 import numpy as np
 import pytest
 
-from qm_pka import refinement
-from qm_pka.config import RefinementConfig
-from qm_pka.ensemble import HARTREE_TO_KCAL
-from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
+from tautomator import refinement
+from tautomator.config import RefinementConfig
+from tautomator.ensemble import HARTREE_TO_KCAL
+from tautomator.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
 FREQS = [1200.0, 1800.0, 3000.0]
 

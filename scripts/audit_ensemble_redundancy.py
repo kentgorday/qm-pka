@@ -19,8 +19,8 @@ from pathlib import Path
 
 import numpy as np
 
-from qm_pka.conformer_symmetry import DEFAULT_RTHR, deduplicate
-from qm_pka.ensemble import load_ensemble
+from tautomator.conformer_symmetry import DEFAULT_RTHR, deduplicate
+from tautomator.ensemble import load_ensemble
 
 
 def main() -> None:

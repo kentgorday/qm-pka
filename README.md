@@ -1,4 +1,4 @@
-# qm-pka
+# tautomator
 
 Three-stage QM workflow for predicting macroscopic aqueous pKa values of small
 organic molecules from a SMILES string. Built on RDKit + CREST/xTB +
@@ -12,7 +12,7 @@ implemented** — see [Status](#status).
 
 ## The pipeline
 
-`qm_pka.pipeline.run_pipeline(config)` orchestrates three stages. Between each
+`tautomator.pipeline.run_pipeline(config)` orchestrates three stages. Between each
 stage, conformers are filtered by an energy window *within* (never across)
 each charge state.
 
@@ -78,7 +78,7 @@ re-filing is a regrouping rather than an atom-correspondence problem. See
 
 ## Data model
 
-Defined in `qm_pka/types.py`. This is the most reused mental model in the
+Defined in `tautomator/types.py`. This is the most reused mental model in the
 codebase; if you only read one file, read this one.
 
 ```
@@ -165,7 +165,7 @@ score. All three drivers implement the same three operations (`single_point`,
   wB97X-3c.
 - **`"psi4"`.** Subprocess driver, writes input decks and parses output. The
   `psi4` executable comes from a pixi environment of its own
-  (`pixi install -e psi4`); qm-pka never imports Psi4.
+  (`pixi install -e psi4`); tautomator never imports Psi4.
   **No analytical PCM gradients**, so `refinement.solvation = "optimize"` is
   refused; it minimizes in gas phase and adds one PCM single point on that
   geometry. Offers all five 3c composites (wB97X-3c, r2SCAN-3c, B97-3c,
@@ -286,7 +286,7 @@ For batch runs over a CSV of SMILES, see `scripts/run_training_set.py`
 
 ## Repo layout
 
-Source under `qm_pka/`. One-liner per module:
+Source under `tautomator/`. One-liner per module:
 
 | Module | Role |
 |---|---|
@@ -336,7 +336,7 @@ Pre-commit hook runs ruff. Mypy is strict.
 The set of things that look weird and aren't. Read before "fixing":
 
 - **Psi4 has a pixi environment to itself** (`psi4`, beside `default`).
-  qm-pka only ever launches the `psi4` executable, so the two environments
+  tautomator only ever launches the `psi4` executable, so the two environments
   are solved separately and share no versions. In one environment they
   could not move: Psi4 after 1.10.0 is built against pybind11-abi 11 and
   PySCF's xcfun against abi 4, which held Psi4 at 1.10.0 and libxc at 7.0.
@@ -346,9 +346,9 @@ The set of things that look weird and aren't. Read before "fixing":
   `PATH`: Psi4 finds `mctc-gcp` there, and r2SCAN-3c fails without it.
   `refine()` and `score()` look the executable up when they pick the driver,
   so a Psi4 that is not installed stops the run instead of failing every
-  conformer in turn. Keep it that way round: don't `import psi4` in qm-pka.
+  conformer in turn. Keep it that way round: don't `import psi4` in tautomator.
   Besides the ABI conflict, running Psi4 as a separate program is what keeps
-  qm-pka's license independent of Psi4's LGPL-3.0.
+  tautomator's license independent of Psi4's LGPL-3.0.
 - **`xtb` is floored at `>=6.7.1` in `pixi.toml`.** Pressure on `mctc-lib`
   has made the solver fall back to the ancient `xtb` 6.4.1 (the last release
   with no `mctc-lib` dependency) before; that was `gcp-correction` 2.3.2
@@ -399,7 +399,7 @@ The set of things that look weird and aren't. Read before "fixing":
   orb-models sets torch's global default dtype, so it is one precision per
   process. The weights come from Hugging Face rather than orb-models' default
   S3 URL (same file, ~1000x faster here) and their sha256 is checked on every
-  load; `QM_PKA_ORBMOL_WEIGHTS` points at a local copy. Once downloaded they
+  load; `TAUTOMATOR_ORBMOL_WEIGHTS` points at a local copy. Once downloaded they
   are read from the cache without asking the server again — the checksum
   already identifies the file, and a rate-limited revalidation request used to
   fail the load with the weights on disk. Refinement loads the model before
@@ -497,9 +497,9 @@ What's not yet here:
 
 Apache-2.0; see [LICENSE](LICENSE).
 
-That covers qm-pka only. Its dependencies are installed separately (pixi
+That covers tautomator only. Its dependencies are installed separately (pixi
 fetches them from conda-forge and PyPI) and keep their own licenses. Psi4, xtb
-and CREST (LGPL-3.0) run as separate executables. Of the libraries qm-pka
+and CREST (LGPL-3.0) run as separate executables. Of the libraries tautomator
 imports, most are Apache-2.0, BSD or MIT (PySCF, RDKit, PyTorch, orb-models,
 geomeTRIC); ASE is LGPL-2.1, and pyscf-dispersion bundles the LGPL-3.0 dftd4
 and s-dftd3 libraries.

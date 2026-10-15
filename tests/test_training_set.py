@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from qm_pka.training_set import (
+from tautomator.training_set import (
     compound_dir_name,
     compound_id,
     find_compound_dir,

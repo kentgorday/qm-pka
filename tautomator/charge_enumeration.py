@@ -23,7 +23,7 @@ from __future__ import annotations
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
-from qm_pka.rdkit_utils import (
+from tautomator.rdkit_utils import (
     canonical_smiles,
     deduplicate_protomers,
     get_formal_charge,
@@ -216,7 +216,7 @@ def enumerate_charge_state(smiles: str, target_charge: int) -> list[str]:
 
     Returns one canonical SMILES per *species*, not per Lewis structure: two
     results that differ only in which atom was chosen to carry a delocalised
-    charge are collapsed by :func:`~qm_pka.rdkit_utils.deduplicate_protomers`,
+    charge are collapsed by :func:`~tautomator.rdkit_utils.deduplicate_protomers`,
     since they describe one microstate. The representative is chosen
     deterministically and does not depend on input order.
 

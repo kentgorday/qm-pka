@@ -22,7 +22,7 @@ charge_max = 1
 solvent = "water"
 
 # The protocol sets every level of theory and window below; each key here just
-# restates one of its defaults (see PROTOCOLS in qm_pka/config.py).
+# restates one of its defaults (see PROTOCOLS in tautomator/config.py).
 
 [refinement]
 method = "OrbMol-v2"  # an OrbMol model name is what selects OrbMol

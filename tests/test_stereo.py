@@ -1,4 +1,4 @@
-from qm_pka.stereo import (
+from tautomator.stereo import (
     canonical_enantiomer,
     deduplicate_enantiomers,
     enumerate_and_deduplicate,

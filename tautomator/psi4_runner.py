@@ -17,9 +17,9 @@ import sys
 import tempfile
 from pathlib import Path
 
-from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS, DEFAULT_MEMORY_GB
-from qm_pka.types import Geometry
-from qm_pka.xyz_io import read_xyz
+from tautomator.config import AUX_DIFFUSE_S, AUXBASIS, DEFAULT_MEMORY_GB
+from tautomator.types import Geometry
+from tautomator.xyz_io import read_xyz
 
 log = logging.getLogger(__name__)
 
@@ -727,9 +727,9 @@ def _scratch_dir() -> tempfile.TemporaryDirectory[str]:
     a single job writes several GB of three-index integrals, and nothing
     deleted the directories afterwards.
 
-    Set QM_PKA_KEEP_SCRATCH=1 to retain them for postmortem debugging.
+    Set TAUTOMATOR_KEEP_SCRATCH=1 to retain them for postmortem debugging.
     """
-    keep = os.environ.get("QM_PKA_KEEP_SCRATCH") == "1"
+    keep = os.environ.get("TAUTOMATOR_KEEP_SCRATCH") == "1"
     return tempfile.TemporaryDirectory(prefix="psi4_", delete=not keep)
 
 

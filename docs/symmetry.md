@@ -11,7 +11,7 @@ work, and they are independent:
 - **Deduplication** removes structures that are other structures relabelled.
 - **Multiplicity** gives each survivor the weight it deserves.
 
-Everything lives in `qm_pka/conformer_symmetry.py`, driven from
+Everything lives in `tautomator/conformer_symmetry.py`, driven from
 `ensemble.deduplicate_charge_state()`.
 
 ---
@@ -173,7 +173,7 @@ Multiplicities are small numbers with exact expected values, so they are worth
 checking by hand on a new species:
 
 ```python
-from qm_pka.conformer_symmetry import symmetry_number, conformer_multiplicity
+from tautomator.conformer_symmetry import symmetry_number, conformer_multiplicity
 
 sigma, achiral = symmetry_number(coords, symbols)
 m = conformer_multiplicity(coords_stack, symbols, includes_enantiomer=False)

@@ -45,7 +45,7 @@ from dataclasses import dataclass
 from rdkit import Chem
 from rdkit.Geometry import Point3D
 
-from qm_pka.tautomer_dedup import (
+from tautomator.tautomer_dedup import (
     DETACHED_DISTANCE,
     ProtonAssignment,
     assign_protons,
@@ -53,7 +53,7 @@ from qm_pka.tautomer_dedup import (
     heavy_components,
     heavy_frameworks_agree,
 )
-from qm_pka.types import (
+from tautomator.types import (
     ChargeState,
     Conformer,
     ExcludedConformer,

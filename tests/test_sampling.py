@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from qm_pka import sampling
-from qm_pka.protomer_geometry import MigrationReport
-from qm_pka.types import Conformer, Geometry
+from tautomator import sampling
+from tautomator.protomer_geometry import MigrationReport
+from tautomator.types import Conformer, Geometry
 
 
 def test_a_failed_hessian_does_not_evict_the_microstate(
@@ -120,7 +120,7 @@ class TestDissociationIsCaughtBeforeTheConformerSearch:
                 ]
             ),
         )
-        from qm_pka.tautomer_dedup import assign_protons
+        from tautomator.tautomer_dedup import assign_protons
 
         assert assign_protons(geom).is_intact, "the hydrogen check cannot see this"
         reason = sampling._dissociated(geom)

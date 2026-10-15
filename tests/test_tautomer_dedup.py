@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from qm_pka.rdkit_utils import smiles_to_3d
-from qm_pka.tautomer_dedup import (
+from tautomator.rdkit_utils import smiles_to_3d
+from tautomator.tautomer_dedup import (
     assign_hydrogens,
     assign_protons,
     deduplicate_tautomers,
@@ -10,7 +10,7 @@ from qm_pka.tautomer_dedup import (
     geometric_identity,
     heavy_frameworks_agree,
 )
-from qm_pka.types import Geometry
+from tautomator.types import Geometry
 
 
 def _make_water() -> Geometry:

@@ -13,7 +13,7 @@ second derivatives, grids, cavity construction) and record what they did.
 
 Refinement produces three terms, each with its own setting:
   electronic — ``method``/``basis``.  An OrbMol model name here (see
-      qm_pka.orbmol_runner.MODELS) makes OrbMol the optimizer; anything else is
+      tautomator.orbmol_runner.MODELS) makes OrbMol the optimizer; anything else is
       DFT on the [compute] driver.
   solvation  — ``solvation``: "optimize" (minimize in implicit solvent),
       "single_point" (gas minimization, then one solvated single point) or
@@ -400,7 +400,7 @@ def _build_scoring(raw: dict[str, Any], driver: str) -> ScoringConfig:
 def _build_refinement(
     raw: dict[str, Any], driver: str, scoring: ScoringConfig
 ) -> RefinementConfig:
-    from qm_pka.orbmol_runner import MODELS
+    from tautomator.orbmol_runner import MODELS
 
     method = raw.get("method", _DFT_REFINEMENT_DEFAULT_METHOD)
     engine = "orbmol" if method.lower() in MODELS else driver

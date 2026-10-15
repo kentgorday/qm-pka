@@ -8,10 +8,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from qm_pka import orbmol_runner
-from qm_pka.config import RefinementConfig
-from qm_pka.refinement import _get_driver, refine
-from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
+from tautomator import orbmol_runner
+from tautomator.config import RefinementConfig
+from tautomator.refinement import _get_driver, refine
+from tautomator.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
 HARTREE_TO_KCAL = 627.509474
 METHOD = "OrbMol-v2"
@@ -60,7 +60,7 @@ class TestWithoutModel:
             raise AssertionError("went to the network with a cached copy on disk")
 
         cached = tmp_path / "weights.ckpt"
-        monkeypatch.delenv("QM_PKA_ORBMOL_WEIGHTS", raising=False)
+        monkeypatch.delenv("TAUTOMATOR_ORBMOL_WEIGHTS", raising=False)
         monkeypatch.setattr(cached_path, "find_latest_cached", lambda url: cached)
         monkeypatch.setattr(cached_path, "cached_path", no_network)
         assert orbmol_runner._weights_path(orbmol_runner.MODELS["orbmol-v2"]) == str(cached)
@@ -71,7 +71,7 @@ class TestWithoutModel:
         import cached_path
 
         fetched = tmp_path / "fetched.ckpt"
-        monkeypatch.delenv("QM_PKA_ORBMOL_WEIGHTS", raising=False)
+        monkeypatch.delenv("TAUTOMATOR_ORBMOL_WEIGHTS", raising=False)
         monkeypatch.setattr(cached_path, "find_latest_cached", lambda url: None)
         monkeypatch.setattr(cached_path, "cached_path", lambda url: fetched)
         assert orbmol_runner._weights_path(orbmol_runner.MODELS["orbmol-v2"]) == str(fetched)
@@ -132,7 +132,7 @@ class TestAgainstTrainingLevel:
             handlers = list(root.handlers)
             orbmol_runner.optimize(WATER, 0, METHOD)
             assert root.handlers == handlers
-            logging.getLogger("qm_pka.refinement").info("still logging")
+            logging.getLogger("tautomator.refinement").info("still logging")
         assert "still logging" in caplog.text
         assert not [r for r in caplog.records if r.name.startswith("geometric")]
 

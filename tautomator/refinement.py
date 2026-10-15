@@ -15,17 +15,17 @@ from __future__ import annotations
 import logging
 from types import ModuleType
 
-from qm_pka import xtb_runner
-from qm_pka.config import DEFAULT_MEMORY_GB, RefinementConfig
-from qm_pka.ensemble import (
+from tautomator import xtb_runner
+from tautomator.config import DEFAULT_MEMORY_GB, RefinementConfig
+from tautomator.ensemble import (
     HARTREE_TO_KCAL,
     _effective_energy,
     deduplicate_charge_state,
     filter_charge_state_by_energy,
 )
-from qm_pka.protomer_geometry import repair_migrated_conformers
-from qm_pka.thermo import quasi_rrho_free_energy
-from qm_pka.types import ChargeState, Ensemble, ExcludedConformer, ExclusionReason
+from tautomator.protomer_geometry import repair_migrated_conformers
+from tautomator.thermo import quasi_rrho_free_energy
+from tautomator.types import ChargeState, Ensemble, ExcludedConformer, ExclusionReason
 
 log = logging.getLogger(__name__)
 
@@ -33,18 +33,18 @@ log = logging.getLogger(__name__)
 def _get_driver(name: str) -> ModuleType:
     """Return the refinement driver module for the given name."""
     if name == "psi4":
-        from qm_pka import psi4_runner
+        from tautomator import psi4_runner
 
         # Outside the per-conformer handlers, which would record a missing
         # Psi4 as each conformer's own failure.
         psi4_runner.psi4_executable()
         return psi4_runner
     if name == "pyscf":
-        from qm_pka import pyscf_runner
+        from tautomator import pyscf_runner
 
         return pyscf_runner
     if name == "orbmol":
-        from qm_pka import orbmol_runner
+        from tautomator import orbmol_runner
 
         return orbmol_runner
     raise ValueError(f"Unknown driver: {name!r}. Must be 'psi4', 'pyscf' or 'orbmol'.")
@@ -63,7 +63,7 @@ def refine(
     """Refine all conformers at the refinement level.
 
     ``config`` carries the level of theory and how solvation and RRHO enter
-    (see qm_pka.config).  ``driver`` is the DFT backend: it optimizes unless an
+    (see tautomator.config).  ``driver`` is the DFT backend: it optimizes unless an
     OrbMol model does, and runs the solvation single point either way.
 
     Conformers whose optimizer ran but did not fully converge are kept (with

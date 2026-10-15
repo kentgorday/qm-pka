@@ -4,7 +4,7 @@ from typing import ClassVar
 import pytest
 from rdkit import Chem
 
-from qm_pka.rdkit_utils import (
+from tautomator.rdkit_utils import (
     canonical_smiles,
     deduplicate_protomers,
     enumerate_tautomers,
@@ -14,7 +14,7 @@ from qm_pka.rdkit_utils import (
     smiles_to_3d,
     validate_input_smiles,
 )
-from qm_pka.stereo import enumerate_and_deduplicate
+from tautomator.stereo import enumerate_and_deduplicate
 
 
 class TestSmilesTo3d:

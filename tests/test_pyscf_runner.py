@@ -15,7 +15,7 @@ from pyscf.dft import libxc
 
 # Import applies the D4 parameter pin, and the composite registration and PCM
 # ECP-cavity patch where this PySCF needs them
-from qm_pka.pyscf_runner import (
+from tautomator.pyscf_runner import (
     _D4_COLON_SYNTAX,
     _D4_COMPOSITES,
     _D4_PARAMS,
@@ -26,7 +26,7 @@ from qm_pka.pyscf_runner import (
     optimize,
     single_point,
 )
-from qm_pka.types import Geometry
+from tautomator.types import Geometry
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -419,7 +419,7 @@ class TestOptimizeEnergy:
             handlers = list(root.handlers)
             optimize(start, 0, "pbe", "sto-3g", threads=1)
             assert root.handlers == handlers
-            logging.getLogger("qm_pka.refinement").info("still logging")
+            logging.getLogger("tautomator.refinement").info("still logging")
         assert "still logging" in caplog.text
         assert not [r for r in caplog.records if r.name.startswith("geometric")]
 
@@ -430,7 +430,7 @@ class TestEinsumPathShim:
     NumPy 2.4 dropped a field from `einsum_path(..., einsum_call=True)`, and
     2.11 unpacks `contraction[:4]` unconditionally. Density-fitted gradients hit
     it through `'xpq,mp,nq->mnxp'` in the auxiliary term. Importing
-    `qm_pka.pyscf_runner` applies the fix; upstream's own fix is in 2.12.0
+    `tautomator.pyscf_runner` applies the fix; upstream's own fix is in 2.12.0
     (commit 4e77c7e), so this test keeps passing unchanged after an upgrade and
     the shim becomes removable without touching it.
     """
@@ -446,7 +446,7 @@ class TestEinsumPathShim:
     def test_multi_operand_einsum_matches_numpy(self) -> None:
         from pyscf import lib
 
-        import qm_pka.pyscf_runner  # noqa: F401  (import applies the shim)
+        import tautomator.pyscf_runner  # noqa: F401  (import applies the shim)
 
         rng = np.random.default_rng(0)
         for subscripts, shapes in self._cases():
@@ -461,7 +461,7 @@ class TestEinsumPathShim:
         """They take an earlier branch that never reaches `_einsum_path`."""
         from pyscf import lib
 
-        import qm_pka.pyscf_runner  # noqa: F401
+        import tautomator.pyscf_runner  # noqa: F401
 
         rng = np.random.default_rng(1)
         a, b = rng.random((4, 5)), rng.random((5, 6))
@@ -475,7 +475,7 @@ class TestEinsumPathShim:
         """
         import numpy
 
-        import qm_pka.pyscf_runner  # noqa: F401
+        import tautomator.pyscf_runner  # noqa: F401
 
         assert numpy.einsum_path.__module__.startswith("numpy")
 
@@ -483,7 +483,7 @@ class TestEinsumPathShim:
         from pyscf import lib
         from pyscf.lib import numpy_helper
 
-        from qm_pka.pyscf_runner import _patch_einsum_path_for_numpy24
+        from tautomator.pyscf_runner import _patch_einsum_path_for_numpy24
 
         installed = numpy_helper._einsum_path
         rng = np.random.default_rng(2)
@@ -499,8 +499,8 @@ class TestEinsumPathShim:
 class TestDensityFittingIsOn:
     def test_the_mean_field_is_density_fitted(self) -> None:
         """Matches Psi4, which already runs DF with the same aux basis."""
-        from qm_pka.pyscf_runner import _build_mf
-        from qm_pka.types import Geometry
+        from tautomator.pyscf_runner import _build_mf
+        from tautomator.types import Geometry
 
         geom = Geometry(
             symbols=("O", "H", "H"),
@@ -512,8 +512,8 @@ class TestDensityFittingIsOn:
 
     def test_density_fitting_sits_under_the_solvent_wrapper(self) -> None:
         """Order is load-bearing: PySCF refuses solvent gradients otherwise."""
-        from qm_pka.pyscf_runner import _build_mf
-        from qm_pka.types import Geometry
+        from tautomator.pyscf_runner import _build_mf
+        from tautomator.types import Geometry
 
         geom = Geometry(
             symbols=("O", "H", "H"),
@@ -531,8 +531,8 @@ class TestDensityFittingIsOn:
 
     def test_short_fitting_sets_get_a_diffuse_s(self) -> None:
         """Only for AUX_DIFFUSE_S's elements; the others keep the library shells."""
-        from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS
-        from qm_pka.pyscf_runner import _auxbasis
+        from tautomator.config import AUX_DIFFUSE_S, AUXBASIS
+        from tautomator.pyscf_runner import _auxbasis
 
         aux = _auxbasis(("C", "S", "H", "H", "Br"))
         assert isinstance(aux, dict)
@@ -544,7 +544,7 @@ class TestDensityFittingIsOn:
 
     def test_the_diffuse_exponents_follow_the_rule(self) -> None:
         """Each is the set's own smallest s exponent for that element, over 2.5."""
-        from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS
+        from tautomator.config import AUX_DIFFUSE_S, AUXBASIS
 
         for elem, exponent in AUX_DIFFUSE_S.items():
             assert exponent == round(_smallest_s(AUXBASIS, elem) / 2.5, 3), elem
@@ -557,7 +557,7 @@ class TestDensityFittingIsOn:
         """
         from pyscf.lib.exceptions import BasisNotFoundError
 
-        from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS
+        from tautomator.config import AUX_DIFFUSE_S, AUXBASIS
 
         short = set()
         for z in range(1, 87):

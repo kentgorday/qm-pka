@@ -21,9 +21,9 @@ from typing import Any
 
 import numpy as np
 
-from qm_pka.config import AUX_DIFFUSE_S, AUXBASIS, DEFAULT_MEMORY_GB
-from qm_pka.geometric_logging import geometric_quiet
-from qm_pka.types import Geometry
+from tautomator.config import AUX_DIFFUSE_S, AUXBASIS, DEFAULT_MEMORY_GB
+from tautomator.geometric_logging import geometric_quiet
+from tautomator.types import Geometry
 
 log = logging.getLogger(__name__)
 
@@ -155,14 +155,14 @@ def _pin_d4_parameters() -> None:
 
     from pyscf.dispersion import dftd4
 
-    if getattr(dftd4.DFTD4Dispersion, "_qm_pka_pinned_params", False):
+    if getattr(dftd4.DFTD4Dispersion, "_tautomator_pinned_params", False):
         return  # idempotent: never double-wrap
 
     base = dftd4.DFTD4Dispersion
     lib = dftd4.libdftd4
 
     class DFTD4Dispersion(base):  # type: ignore[misc, valid-type]
-        _qm_pka_pinned_params = True
+        _tautomator_pinned_params = True
         _param: Any
 
         def __init__(self, mol: Any, xc: str, *args: Any, **kwargs: Any) -> None:
@@ -190,7 +190,7 @@ def _pin_d4_parameters() -> None:
             lib.dftd4_delete_param(ctypes.byref(self._param))
             self._param = param
 
-    DFTD4Dispersion._qm_pka_original = base
+    DFTD4Dispersion._tautomator_original = base
     dftd4.DFTD4Dispersion = DFTD4Dispersion
 
 
@@ -237,7 +237,7 @@ def _patch_einsum_path_for_numpy24() -> None:
         pass
 
     inner = numpy_helper._einsum_path
-    if getattr(inner, "_qm_pka_padded", False):
+    if getattr(inner, "_tautomator_padded", False):
         return
 
     def padded(*args: Any, **kwargs: Any) -> Any:
@@ -250,7 +250,7 @@ def _patch_einsum_path_for_numpy24() -> None:
         restored = [(c[0], None, c[1], c[2]) if len(c) == 3 else c for c in contractions]
         return operands, restored
 
-    padded._qm_pka_padded = True  # type: ignore[attr-defined]
+    padded._tautomator_padded = True  # type: ignore[attr-defined]
     numpy_helper._einsum_path = padded
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from qm_pka.config import _has_diffuse, load_config
+from tautomator.config import _has_diffuse, load_config
 
 
 @pytest.fixture()

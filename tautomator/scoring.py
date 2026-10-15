@@ -10,9 +10,9 @@ from __future__ import annotations
 import logging
 from types import ModuleType
 
-from qm_pka.config import DEFAULT_MEMORY_GB
-from qm_pka.ensemble import filter_charge_state_by_energy
-from qm_pka.types import Ensemble, ExcludedConformer
+from tautomator.config import DEFAULT_MEMORY_GB
+from tautomator.ensemble import filter_charge_state_by_energy
+from tautomator.types import Ensemble, ExcludedConformer
 
 log = logging.getLogger(__name__)
 
@@ -20,14 +20,14 @@ log = logging.getLogger(__name__)
 def _get_driver(name: str) -> ModuleType:
     """Return the DFT driver module for the given name."""
     if name == "psi4":
-        from qm_pka import psi4_runner
+        from tautomator import psi4_runner
 
         # Outside the per-conformer handlers, which would record a missing
         # Psi4 as each conformer's own failure.
         psi4_runner.psi4_executable()
         return psi4_runner
     if name == "pyscf":
-        from qm_pka import pyscf_runner
+        from tautomator import pyscf_runner
 
         return pyscf_runner
     raise ValueError(f"Unknown driver: {name!r}. Must be 'psi4' or 'pyscf'.")

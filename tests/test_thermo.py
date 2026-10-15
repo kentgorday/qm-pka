@@ -1,4 +1,4 @@
-from qm_pka.thermo import (
+from tautomator.thermo import (
     DEFAULT_SCALE_THERMAL,
     DEFAULT_SCALE_ZPVE,
     QRRHO_CUTOFF,

@@ -6,8 +6,8 @@ import argparse
 import logging
 from pathlib import Path
 
-from qm_pka.ensemble import assign_weights, serialize_ensemble
-from qm_pka.sampling import run_approach1
+from tautomator.ensemble import assign_weights, serialize_ensemble
+from tautomator.sampling import run_approach1
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)

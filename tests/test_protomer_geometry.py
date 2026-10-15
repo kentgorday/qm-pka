@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 from rdkit import Chem
 
-from qm_pka.ensemble import deduplicate_conformers
-from qm_pka.protomer_geometry import (
+from tautomator.ensemble import deduplicate_conformers
+from tautomator.protomer_geometry import (
     DETACHED_DISTANCE,
     MigrationReport,
     _heavy_slots,
@@ -29,9 +29,9 @@ from qm_pka.protomer_geometry import (
     repair_migrated_conformers,
     template_from_smiles,
 )
-from qm_pka.rdkit_utils import canonical_smiles, smiles_to_3d
-from qm_pka.tautomer_dedup import geometric_fingerprint, heavy_components
-from qm_pka.types import ChargeState, Conformer, Geometry, Microstate
+from tautomator.rdkit_utils import canonical_smiles, smiles_to_3d
+from tautomator.tautomer_dedup import geometric_fingerprint, heavy_components
+from tautomator.types import ChargeState, Conformer, Geometry, Microstate
 
 
 def _embed(smiles: str, seed: int | None = None) -> tuple[Geometry, str]:
@@ -1036,7 +1036,7 @@ class TestTheIdentityFastPathSkipsTheSearch:
         assert layouts == 1
 
     def test_the_cap_warning_stays_quiet(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="qm_pka.protomer_geometry"):
+        with caplog.at_level(logging.WARNING, logger="tautomator.protomer_geometry"):
             self._layouts_counting_searches(self.SYMMETRIC)
         assert "hit its cap" not in caplog.text
 

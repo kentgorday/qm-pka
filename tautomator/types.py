@@ -78,7 +78,7 @@ class Conformer:
     rrho_correction: float | None = None  # G_RRHO (Hartree)
     weight: float | None = None  # Boltzmann weight, normalized across the charge state
     refinement_converged: bool | None = None  # None before refinement; bool after
-    multiplicity: float = 1.0  # n_states / sigma; see qm_pka.conformer_symmetry
+    multiplicity: float = 1.0  # n_states / sigma; see tautomator.conformer_symmetry
 
     @property
     def free_energy(self) -> float:
@@ -111,7 +111,7 @@ ExclusionReason = Literal[
     # drop conformers without a record.
     "gas_prefilter",
     # The five below differ in kind from everything above: the energy computed
-    # fine, and it is the *label* that is wrong.  See qm_pka.protomer_geometry.
+    # fine, and it is the *label* that is wrong.  See tautomator.protomer_geometry.
     "fragmented",  # the heavy-atom framework came apart; the energy is a complex's
     "proton_detached",  # a hydrogen left the molecule; the energy is a fragment's
     "no_matching_microstate",  # minimised to a species the enumerator never produced

@@ -6,8 +6,8 @@ import argparse
 import logging
 from pathlib import Path
 
-from qm_pka.config import load_config
-from qm_pka.pipeline import run_pipeline
+from tautomator.config import load_config
+from tautomator.pipeline import run_pipeline
 
 
 def main() -> None:

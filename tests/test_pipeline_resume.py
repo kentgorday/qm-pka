@@ -9,14 +9,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from qm_pka.ensemble import (
+from tautomator.ensemble import (
     SCHEMA_VERSION,
     load_ensemble,
     schema_version,
     serialize_ensemble,
 )
-from qm_pka.pipeline import _find_resume_point
-from qm_pka.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
+from tautomator.pipeline import _find_resume_point
+from tautomator.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
 
 
 def _ensemble(smiles: str = "CCO") -> Ensemble:

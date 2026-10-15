@@ -10,9 +10,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from qm_pka import psi4_runner, refinement, scoring
-from qm_pka.config import DEFAULT_MEMORY_GB
-from qm_pka.psi4_runner import (
+from tautomator import psi4_runner, refinement, scoring
+from tautomator.config import DEFAULT_MEMORY_GB
+from tautomator.psi4_runner import (
     _MODIFIED_BONDI_RADII,
     _PCM_RADII_SCALING,
     _df_basis_block,
@@ -21,7 +21,7 @@ from qm_pka.psi4_runner import (
     _scratch_dir,
     psi4_executable,
 )
-from qm_pka.types import Geometry
+from tautomator.types import Geometry
 
 
 def _water() -> Geometry:
@@ -144,8 +144,8 @@ class TestFittingBasisBlock:
         # Psi4's shells come from basis-set-exchange and PySCF's from its own
         # library; both backends must end up with the same fit, primitive included.
         pytest.importorskip("pyscf")
-        from qm_pka.config import AUX_DIFFUSE_S
-        from qm_pka.pyscf_runner import _auxbasis
+        from tautomator.config import AUX_DIFFUSE_S
+        from tautomator.pyscf_runner import _auxbasis
 
         elements = tuple(AUX_DIFFUSE_S)
         geom = Geometry(symbols=elements, coords=np.zeros((len(elements), 3)))
@@ -217,7 +217,7 @@ class TestScratchCleanup:
     def test_kept_when_env_set(
         self, isolated_tmpdir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("QM_PKA_KEEP_SCRATCH", "1")
+        monkeypatch.setenv("TAUTOMATOR_KEEP_SCRATCH", "1")
         with _scratch_dir() as tmp:
             captured = Path(tmp)
         # retained on purpose -- isolated_tmpdir keeps it inside pytest's
@@ -368,7 +368,7 @@ def test_run_psi4_rejects_a_suppressed_pcm_error(
         )
 
     monkeypatch.setattr(psi4_runner, "psi4_executable", lambda: tmp_path / "psi4")
-    monkeypatch.setattr("qm_pka.psi4_runner.subprocess.run", lambda *a, **k: _Result())
+    monkeypatch.setattr("tautomator.psi4_runner.subprocess.run", lambda *a, **k: _Result())
     (tmp_path / "output.dat").write_text("=== FINAL ENERGY: -1.0 ===")
     with pytest.raises(RuntimeError, match="invalid cavity"):
         psi4_runner._run_psi4("", tmp_path)

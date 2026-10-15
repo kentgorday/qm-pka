@@ -12,9 +12,9 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from qm_pka.types import Conformer, Geometry
-from qm_pka.xtb_runner import single_point
-from qm_pka.xyz_io import read_multi_xyz, write_xyz
+from tautomator.types import Conformer, Geometry
+from tautomator.xtb_runner import single_point
+from tautomator.xyz_io import read_multi_xyz, write_xyz
 
 log = logging.getLogger(__name__)
 

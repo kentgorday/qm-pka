@@ -9,13 +9,13 @@ import numpy as np
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
 
-from qm_pka.conformer_symmetry import (
+from tautomator.conformer_symmetry import (
     KB_HARTREE,
     conformer_multiplicity,
     deduplicate,
     effective_energy_offset,
 )
-from qm_pka.types import (
+from tautomator.types import (
     ChargeState,
     Conformer,
     Ensemble,

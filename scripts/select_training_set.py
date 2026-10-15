@@ -127,7 +127,7 @@ def count_ionizable_sites(smi: str) -> int | None:
 
     Returns None for invalid SMILES.
     """
-    from qm_pka.charge_enumeration import _get_deprot_rxns, _get_prot_rxns
+    from tautomator.charge_enumeration import _get_deprot_rxns, _get_prot_rxns
 
     mol = Chem.MolFromSmiles(smi)
     if mol is None:

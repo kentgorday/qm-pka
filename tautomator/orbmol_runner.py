@@ -29,9 +29,9 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from qm_pka.config import DEFAULT_MEMORY_GB
-from qm_pka.geometric_logging import geometric_quiet
-from qm_pka.types import Geometry
+from tautomator.config import DEFAULT_MEMORY_GB
+from tautomator.geometric_logging import geometric_quiet
+from tautomator.types import Geometry
 
 log = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class _Model:
 
 # Weights are fetched on first use and cached by cached_path under
 # ~/.cache/cached_path, and read from there without a network call afterwards
-# (see _weights_path); set QM_PKA_ORBMOL_WEIGHTS to use a copy from elsewhere.
+# (see _weights_path); set TAUTOMATOR_ORBMOL_WEIGHTS to use a copy from elsewhere.
 # Hugging Face serves the same file orb-models' default S3 URL does (identical
 # sha256) but, in testing, ~1000x faster.  The checksum is verified on every
 # load, so a changed or truncated file cannot silently change results.
@@ -111,7 +111,7 @@ def _verified_weights(path: str, sha256: str) -> str:
 
 def _weights_path(spec: _Model) -> str:
     """Return a local path to the weights, going to the network only for a first download."""
-    if override := os.environ.get("QM_PKA_ORBMOL_WEIGHTS"):
+    if override := os.environ.get("TAUTOMATOR_ORBMOL_WEIGHTS"):
         return override
 
     from cached_path import cached_path, find_latest_cached

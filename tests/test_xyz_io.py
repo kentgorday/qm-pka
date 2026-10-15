@@ -3,8 +3,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from qm_pka.types import Conformer, Geometry
-from qm_pka.xyz_io import (
+from tautomator.types import Conformer, Geometry
+from tautomator.xyz_io import (
     _parse_comment_energy,
     read_multi_xyz,
     read_xyz,

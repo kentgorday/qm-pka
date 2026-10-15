@@ -5,18 +5,18 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from qm_pka.config import PkaConfig
-from qm_pka.ensemble import (
+from tautomator.config import PkaConfig
+from tautomator.ensemble import (
     SCHEMA_VERSION,
     assign_weights,
     load_ensemble,
     schema_version,
     serialize_ensemble,
 )
-from qm_pka.refinement import refine
-from qm_pka.sampling import run_approach1, run_approach2
-from qm_pka.scoring import score
-from qm_pka.types import Ensemble
+from tautomator.refinement import refine
+from tautomator.sampling import run_approach1, run_approach2
+from tautomator.scoring import score
+from tautomator.types import Ensemble
 
 log = logging.getLogger(__name__)
 

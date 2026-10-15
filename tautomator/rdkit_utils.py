@@ -10,7 +10,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdCIPLabeler
 from rdkit.Chem.MolStandardize import rdMolStandardize
 
-from qm_pka.types import Geometry
+from tautomator.types import Geometry
 
 log = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def smiles_to_3d(smiles: str, seed: int | None = None) -> tuple[Geometry, str]:
     diverge, because RDKit's canonical ranking depends on formal charge and
     hydrogen count. A conformer whose proton migrates then cannot be re-filed
     under the microstate it became without solving an atom correspondence
-    problem first; see `qm_pka.protomer_geometry`. Hydrogens still interleave
+    problem first; see `tautomator.protomer_geometry`. Hydrogens still interleave
     differently between protomers, since SMILES writes each one attached to its
     heavy atom, but that reordering is a regrouping rather than a mapping.
 
