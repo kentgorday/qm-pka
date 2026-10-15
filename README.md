@@ -243,6 +243,21 @@ The `3c` composites are a functional *and* the basis they were parameterized
 with, so `config.load_config` supplies the basis and refuses any other pairing
 (`wB97X-3c` with def2-TZVP is a different method, not wB97X-3c).
 
+`load_config` warns when the scoring basis has no diffuse functions, whatever
+the charge range. Scoring energies are compared across charge states, and the
+deprotonations between them need diffuse functions even when no anion appears.
+At wB97M-V in IEF-PCM water, def2-TZVPP put deprotonation energies above
+def2-TZVPPD by 1.3–2.8 kcal/mol for neutral acids, 1.0–2.4 for cations becoming
+zwitterions (66–91% of the same acid without the cation) and 0.7–0.9 for
+ammonium ions; def2-SVP against def2-SVPD is 5–7 times that. The check reads
+the basis *name* (`aug-`, `ma-def2-`, the calendar sets, Pople `+`, def2 `…D`),
+so an augmented set it does not recognize warns too. vDZP is exempt: it has no
+diffuse shells, but it came within 0.8 kcal/mol of def2-TZVPPD on the same
+deprotonations, except two tetrazoles, which it put 1.6–1.9 lower. Refinement
+bases are not checked: those energies only rank within a charge state, where
+def2-TZVPP and def2-TZVPPD differed by at most 0.7 kcal/mol on a zwitterion
+against its neutral tautomer.
+
 `config.provenance()` records what each stage computed; `pipeline.py` writes it
 into `ensemble.settings` so a checkpoint on disk says which level produced it.
 

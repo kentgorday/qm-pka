@@ -28,6 +28,7 @@ Scoring always recomputes electronic + solvation and carries RRHO over.
 from __future__ import annotations
 
 import logging
+import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -370,6 +371,7 @@ def load_config(path: Path) -> PkaConfig:
     scoring = _build_scoring(score_raw, compute.driver)
     refinement = _build_refinement(ref_raw, compute.driver, scoring)
     _validate(refinement, scoring, compute)
+    _warn_no_diffuse(scoring)
 
     return PkaConfig(
         molecule=molecule,
@@ -562,6 +564,82 @@ def _check_composite(label: str, method: str, basis: str, driver: str) -> None:
             f"{label} = {method!r} is not available on the pyscf driver (it implements "
             f"only {', '.join(sorted(PYSCF_COMPOSITES))} of the 3c composites). Use "
             "[compute] driver = 'psi4', or wB97X-3c."
+        )
+
+
+# Basis sets with diffuse functions on the heavy atoms, told by name.  The name
+# is what the config has: each driver resolves it in its own library, and no
+# library reachable from here knows all of them (PySCF's and basis_set_exchange
+# lack jun-cc-pVDZ and heavy-aug-cc-pVDZ, Psi4's lacks ma-def2-SVP), so reading
+# exponents would need this rule as its fallback anyway.  Nor do exponents give
+# a sharper answer.  Across the 494 orbital sets in basis_set_exchange, the
+# smallest sp exponent on C/N/O/F/S/Cl relative to aug-cc-pVDZ's runs from
+# below 0.1 to above 6 with no gap to put a threshold in: def2-SVPD on nitrogen
+# (1.7), vDZP on carbon (1.6) and cc-pV6Z (1.7) sit together.  What the name
+# records is whether the set was built with an augmentation.
+#
+# Matched against the name with case, hyphens, underscores and spaces removed,
+# which is how PySCF reads it.
+_DIFFUSE_BASIS = re.compile(
+    r"aug"  # aug-cc-pVXZ, d-aug-, heavy-aug-, aug-pcseg-n
+    r"|^(feb|mar|apr|may|jun|jul)cc"  # the calendar truncations of aug-cc-pVXZ
+    r"|^madef2"  # minimally augmented Karlsruhe
+    r"|\d\+{1,2}g"  # Pople 6-31+G*, 6-311++G(2d,2p); not the tight d of cc-pV(D+d)Z
+    r"|^def2(sv|tzv|qzv)pp?d$"  # Karlsruhe property-optimized: def2-SVPD ... def2-QZVPPD
+)
+
+
+def _normalize_basis(basis: str) -> str:
+    return re.sub(r"[-_\s]", "", basis.lower())
+
+
+def _has_diffuse(basis: str) -> bool:
+    return bool(_DIFFUSE_BASIS.search(_normalize_basis(basis)))
+
+
+def _warn_no_diffuse(scoring: ScoringConfig) -> None:
+    """Warn about a scoring basis without diffuse functions.
+
+    Scoring energies are compared across charge states, and the deprotonations
+    between them need diffuse functions whether or not an anion appears.
+    Deprotonation energies at wB97M-V in IEF-PCM water, def2-TZVPP minus
+    def2-TZVPPD (kcal/mol):
+      neutral acid -> anion: acetic acid 2.8, methanesulfonic acid 2.6,
+          phenol 2.6, benzoic acid 2.0, 5-methyltetrazole 1.3
+      cation -> zwitterion: glycine 1.8, beta-alanine 2.3, GABA 2.4, taurine 1.9,
+          4-(aminomethyl)phenol 2.3, nicotinic acid 1.7,
+          5-(aminomethyl)tetrazole 1.0; 66-91% of the same acid group without
+          the cation
+      ammonium -> amine (no anionic site at all): glycine 0.9, GABA 0.7
+    def2-SVP minus def2-SVPD is 5-7 times larger throughout (4.1-16.1).  So the
+    check does not look at the charge range: keeping anions out of the run does
+    not keep the error out.
+
+    vDZP is exempt.  It has no diffuse shells by name, but its valence s and p
+    are nearly as diffuse as aug-cc-pVDZ's, and it does not have the failure
+    this warns about: against def2-TZVPPD it is within 0.8 kcal/mol on the same
+    deprotonations except the two tetrazoles, which it puts 1.6 and 1.9 lower,
+    with 72 basis functions on acetic acid to def2-TZVPPD's 222.
+
+    A 3c composite is left alone, its basis not being a choice.  So are the
+    refinement bases: those energies only rank conformers and tautomers within
+    a charge state, where def2-TZVPP and def2-TZVPPD differ by 0.7 and 0.3
+    kcal/mol on a zwitterion against its neutral tautomer (glycine,
+    4-aminobutanoic acid).
+    """
+    if scoring.method.lower() in COMPOSITE_BASIS:
+        return
+    if _normalize_basis(scoring.basis) == "vdzp":
+        return
+    if not _has_diffuse(scoring.basis):
+        log.warning(
+            f"[scoring] basis = {scoring.basis!r} has no diffuse functions. Scoring "
+            "energies are compared across charge states, and the deprotonations "
+            "between them need diffuse functions even when no anion appears: in "
+            "testing, def2-TZVPP put deprotonation energies above def2-TZVPPD by "
+            "1.3-2.8 kcal/mol for neutral acids, 1.0-2.4 for cations becoming "
+            "zwitterions and 0.7-0.9 for ammonium ions (0.5-2.0 pKa), and def2-SVP "
+            "above def2-SVPD by 4-16. Use an augmented set such as def2-TZVPPD."
         )
 
 

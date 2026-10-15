@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from qm_pka.config import load_config
+from qm_pka.config import _has_diffuse, load_config
 
 
 @pytest.fixture()
@@ -550,6 +550,136 @@ class TestCompositeMethods:
         """)
         )
         assert (cfg.refinement.method, cfg.refinement.basis) == ("B3LYP", "6-31G*")
+
+
+class TestDiffuseBasis:
+    @pytest.mark.parametrize(
+        "basis",
+        [
+            "def2-SVPD",
+            "def2-TZVPPD",
+            "DEF2-QZVPPD",
+            "ma-def2-SVP",
+            "aug-cc-pVDZ",
+            "d-aug-cc-pVTZ",
+            "heavy-aug-cc-pVDZ",
+            "jun-cc-pVDZ",
+            "aug-cc-pV(D+d)Z",
+            "aug-pcseg-1",
+            "6-31+G*",
+            "6-31+G(d)",
+            "6-311++G(2d,2p)",
+            "augccpvdz",  # PySCF ignores case, hyphens and underscores
+            "def2_svpd",
+        ],
+    )
+    def test_names_with_diffuse_functions(self, basis: str) -> None:
+        assert _has_diffuse(basis)
+
+    @pytest.mark.parametrize(
+        "basis",
+        [
+            "def2-SVP",
+            "def2-TZVPP",
+            "def2-QZVPP",
+            "def2-mTZVPP",
+            "cc-pVDZ",
+            "cc-pV(D+d)Z",  # a tight d, not a diffuse shell
+            "pcseg-1",
+            "6-31G*",
+            "6-31G(d)",
+            "6-311G(2d,2p)",
+            "vDZP",
+            "STO-3G",
+        ],
+    )
+    def test_names_without_diffuse_functions(self, basis: str) -> None:
+        assert not _has_diffuse(basis)
+
+    def test_scoring_basis_warns(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CC(=O)O"
+                [scoring]
+                basis = "def2-TZVPP"
+            """)
+            )
+        assert "[scoring] basis = 'def2-TZVPP' has no diffuse functions" in caplog.text
+
+    def test_vdzp_scoring_does_not_warn(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CC(=O)O"
+                [scoring]
+                method = "wB97M-V"
+                basis = "vDZP"
+            """)
+            )
+        assert "diffuse" not in caplog.text
+
+    def test_refinement_basis_does_not_warn(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Refinement only ranks within a charge state.
+        with caplog.at_level(logging.WARNING):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CC(=O)O"
+                [refinement]
+                method = "B3LYP"
+                basis = "6-31G*"
+            """)
+            )
+        assert "diffuse" not in caplog.text
+
+    def test_composite_scoring_does_not_warn(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CC(=O)O"
+                [scoring]
+                method = "wB97X-3c"
+            """)
+            )
+        assert "diffuse" not in caplog.text
+
+    def test_cation_only_run_warns(
+        self, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # No anion charge state, but zwitterions and plain amine deprotonation
+        # still need diffuse functions.
+        with caplog.at_level(logging.WARNING):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "NCC(=O)O"
+                charge_min = 0
+                charge_max = 1
+                [scoring]
+                basis = "def2-TZVPP"
+            """)
+            )
+        assert "[scoring] basis = 'def2-TZVPP' has no diffuse functions" in caplog.text
+
+    @pytest.mark.parametrize("header", ["", 'protocol = "high_quality"', 'protocol = "fast"'])
+    def test_defaults_are_quiet(
+        self, header: str, tmp_toml: Callable[[str], Path], caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            load_config(tmp_toml(f'{header}\n[molecule]\nsmiles = "CC(=O)O"\n'))
+        assert "diffuse" not in caplog.text
 
 
 class TestSamplingConfig:
