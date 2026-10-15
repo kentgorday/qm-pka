@@ -515,6 +515,30 @@ class TestCompositeMethods:
             """)
             )
 
+    @pytest.mark.parametrize("header", ["", 'protocol = "high_quality"', 'protocol = "fast"'])
+    def test_composite_scoring_gets_its_basis(
+        self, header: str, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        # Neither the scoring default nor a preset's basis applies to a composite.
+        cfg = load_config(
+            tmp_toml(f'{header}\n[molecule]\nsmiles = "CCO"\n[scoring]\nmethod = "wB97X-3c"\n')
+        )
+        assert (cfg.scoring.method, cfg.scoring.basis) == ("wB97X-3c", "vDZP")
+
+    def test_preset_basis_kept_for_a_plain_functional(
+        self, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            protocol = "fast"
+            [molecule]
+            smiles = "CCO"
+            [scoring]
+            method = "B3LYP"
+        """)
+        )
+        assert cfg.scoring.basis == "def2-TZVPPD"
+
     def test_plain_functional_keeps_its_basis(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""

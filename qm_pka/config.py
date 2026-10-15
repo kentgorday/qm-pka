@@ -303,7 +303,12 @@ def load_config(path: Path) -> PkaConfig:
 
     def section(name: str) -> dict[str, Any]:
         merged = dict(preset.get(name, {}))
-        merged.update(raw.get(name, {}))
+        own = raw.get(name, {})
+        # A preset's basis was chosen for the preset's method; a 3c composite
+        # named in the file brings its own.
+        if "basis" not in own and _default_basis(own.get("method", "")):
+            merged.pop("basis", None)
+        merged.update(own)
         return merged
 
     mol_raw = raw.get("molecule")
@@ -380,9 +385,10 @@ def _build_scoring(raw: dict[str, Any], driver: str) -> ScoringConfig:
     model = raw.get("solvent_model", _DEFAULT_SOLVENT_MODEL[driver])
     if isinstance(model, str) and model.lower() == "none":
         model = None
+    method = raw.get("method", _SCORING_DEFAULTS["method"])
     return ScoringConfig(
-        method=raw.get("method", _SCORING_DEFAULTS["method"]),
-        basis=raw.get("basis", _SCORING_DEFAULTS["basis"]),
+        method=method,
+        basis=raw.get("basis", _default_basis(method) or _SCORING_DEFAULTS["basis"]),
         solvent_model=model,
         ewin=raw.get("ewin", 10.0),
         pcm_hydrogen_radius=raw.get("pcm_hydrogen_radius", 1.1),
