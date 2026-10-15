@@ -475,6 +475,66 @@ The set of things that look weird and aren't. Read before "fixing":
   the total.
 - **Sampling solvent is hardcoded to ALPB water** and not user-exposed.
 
+## Roadmap
+
+tautomator started as a pKa tool, but most of what it does is not specific to
+pKa. It turns a SMILES string into the right set of species — tautomers,
+protomers, zwitterions, stereoisomers — and a deduplicated, symmetry-weighted
+conformer ensemble for each, refined and scored with checks that every structure
+is still the species it is filed under. That machinery is meant to serve two
+kinds of work:
+
+- **Solution properties from one run.** pKa, solvation free energy, logP and
+  logD have the same shape: enumerate species, narrow the conformers, build a
+  partition function per species set and solvent, read off the observable. The
+  observables a run asks for will decide which charge states and solvents it
+  computes. logD needs no calculation of its own: it is the neutral form's logP
+  combined with the pKa populations.
+- **Force-field parameterization.** Bespoke SMIRNOFF parameters, exported to
+  Amber, GROMACS or OpenMM, for the protomer that dominates at the pH of
+  interest, which the pKa machinery decides. It reuses the conformer pools and
+  adds fragmentation by GFN2 bond orders, torsion scans, ML-potential sampling
+  and NEB paths between neighbouring conformers (all rescored with DFT), RESP2
+  charges with virtual sites, and valence fitting with smee/descent.
+
+Both rest on **one solvation model on every engine**: the same smooth
+switching/Gaussian cavity and IEF-PCM in PySCF and in Psi4 (through
+[psi4-swig-pcm](https://github.com/kentgorday/psi4-swig-pcm), LGPL-3,
+installed only in the `psi4` environment).
+
+IEF-PCM is electrostatics only, and that is not good enough for ions in water.
+Water solvates anions and cations through strong charge-transfer and
+hydrogen-bonding interactions that a dielectric continuum cannot represent, and
+these do not cancel between protonation states: one side of every pKa
+transition is an ion. Against experiment, an electrostatics-only continuum
+under-solvates anions by a median 15 kcal/mol (about 11 pKa units) and cations
+by 6, against about 1 for neutrals (Pomogaeva & Chipman's set of 372 solutes).
+The same missing terms decide transfer between solvents: without them every
+logP comes out below zero, n-hexane's included.
+
+The missing part will be a correction in the style of CMIRS: dispersion and
+exchange integrals, plus a surface integral of the solute's field at the
+cavity. The surface integral stands in for FESR's two field extrema and carries
+the charge-transfer and hydrogen-bond term. It will be fitted on our own
+cavity, because CMIRS's published parameters do not transfer to it.
+
+Next, in order:
+
+1. **IEF-PCM gradients in refinement on both backends**: psi4-swig-pcm for Psi4,
+   and a faster PCM for PySCF, whose stock PCM triples the cost of an SCF.
+   Solvated minimization then works on Psi4 and stays cheap on PySCF.
+2. **Run MNSol solutes** (≤10 heavy atoms, ≤2 rotatable bonds; 418 solutes,
+   103 of them ions) in water, 1-octanol and hexadecane.
+3. **Fit the non-electrostatic correction** on that set.
+4. **Rerun the pKa training and evaluation set** with IEF-PCM plus the
+   correction, and see whether any pKa-specific fitting is still needed.
+5. **OrbMol-v2 with ALPB in refinement.** In the gas phase OrbMol turns
+   zwitterions back into neutral forms. With an implicit solvent acting on its
+   latent charges, its minima land within 0.06 Å of DFT+PCM on the molecules
+   tested so far, and ALPB costs about a millisecond per geometry.
+6. **logP and logD.**
+7. **Force-field parameterization.**
+
 ## Status
 
 What's implemented:
