@@ -122,10 +122,20 @@ class TestFittingBasisBlock:
     """The extra s primitive of config.AUX_DIFFUSE_S, as Psi4 is told about it."""
 
     def test_nothing_to_add_means_no_block(self) -> None:
-        assert _df_basis_block(_water()) == ""
+        assert _df_basis_block("def2-QZVPPD", _water()) == ""
+
+    @pytest.mark.parametrize("basis", ["def2-QZVPPD", "def2-SVP", "def2-mTZVPP", "vDZP"])
+    def test_bases_psi4_fits_with_that_set_get_it(self, basis: str) -> None:
+        assert "def2-universal-jkfit-plus-s" in _df_basis_block(basis, _thioacetate())
+
+    @pytest.mark.parametrize("basis", ["cc-pVTZ", "aug-cc-pVTZ", "6-31+G*", "pcseg-2"])
+    def test_other_bases_keep_psi4s_own_fit(self, basis: str) -> None:
+        # Psi4 fits these with a JKFIT set of its own, which for an augmented
+        # basis does better by small anions than ours; see config.AUXBASIS.
+        assert _df_basis_block(basis, _thioacetate()) == ""
 
     def test_only_those_elements_get_a_set_of_their_own(self) -> None:
-        block = _df_basis_block(_thioacetate())
+        block = _df_basis_block("def2-QZVPPD", _thioacetate())
         assert 'key="df_basis_scf"' in block
         assigns = [line for line in block.splitlines() if line.startswith("assign")]
         assert assigns == ["assign def2-universal-jkfit", "assign S def2-universal-jkfit-plus-s"]
@@ -139,7 +149,7 @@ class TestFittingBasisBlock:
 
         elements = tuple(AUX_DIFFUSE_S)
         geom = Geometry(symbols=elements, coords=np.zeros((len(elements), 3)))
-        block = _df_basis_block(geom)
+        block = _df_basis_block("def2-QZVPPD", geom)
         pyscf_aux = _auxbasis(elements)
         assert isinstance(pyscf_aux, dict)
         for elem in elements:
@@ -161,7 +171,7 @@ class TestFittingBasisBlock:
         psi4_runner.frequencies(chloride, -1, "PBE0", "def2-SVP")
         assert len(inputs) == 3
         for text in inputs:
-            assert _df_basis_block(chloride) in text
+            assert _df_basis_block("def2-SVP", chloride) in text
 
 
 @pytest.fixture

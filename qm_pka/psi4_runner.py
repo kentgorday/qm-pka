@@ -293,15 +293,19 @@ def _bse_basis_block(basis: str, geom: Geometry) -> str:
     return f'\nbasis_helper("""\n{psi4_str}\n""", name="vDZP", set_option=True)\n'
 
 
-def _df_basis_block(geom: Geometry) -> str:
+def _df_basis_block(basis: str, geom: Geometry) -> str:
     """A Psi4 input snippet that gives the fitting basis its extra s primitives.
 
-    "" unless `geom` holds an element of AUX_DIFFUSE_S.  Psi4 cannot add a
+    "" unless `basis` is one Psi4 fits with AUXBASIS -- the def2 family and
+    vDZP -- and `geom` holds an element of AUX_DIFFUSE_S.  Psi4 cannot add a
     function to a library set, so those elements get a set of their own --
     AUXBASIS as basis-set-exchange has it, which is what PySCF and Psi4 ship,
     plus the primitive -- and every other atom is assigned AUXBASIS by name,
-    which is what Psi4 picks for it anyway with a def2 basis or vDZP.
+    which is what Psi4 picks for it anyway.  Any other basis keeps the fit
+    Psi4 picks for it, whatever the elements; config.AUXBASIS says why.
     """
+    if not (basis.lower().startswith("def2") or basis.lower() == "vdzp"):
+        return ""
     elements = sorted(AUX_DIFFUSE_S.keys() & set(geom.symbols))
     if not elements:
         return ""
@@ -517,7 +521,7 @@ set {{
         )
 
     input_text += _bse_basis_block(basis, geom)
-    input_text += _df_basis_block(geom)
+    input_text += _df_basis_block(basis, geom)
 
     input_text += f"""
 E = energy('{method}')
@@ -573,7 +577,7 @@ set {{
         )
 
     input_text += _bse_basis_block(basis, geom)
-    input_text += _df_basis_block(geom)
+    input_text += _df_basis_block(basis, geom)
 
     # Wrap optimize() so that a non-convergence exception still yields a
     # geometry and energy on disk (from the last optimizer step).  Two failure
@@ -650,7 +654,7 @@ set {{
         )
 
     input_text += _bse_basis_block(basis, geom)
-    input_text += _df_basis_block(geom)
+    input_text += _df_basis_block(basis, geom)
 
     input_text += f"""
 E, wfn = frequency('{method}', return_wfn=True)

@@ -41,12 +41,22 @@ from typing import Any, Literal
 # there is nothing to buy by going higher.
 DEFAULT_MEMORY_GB = 4.0
 
-# Coulomb/exchange fitting basis for density-fitted SCF, the same on both
-# backends.  Weigend's universal JK set is what Psi4 blends by default for the
-# def2 family and for vDZP -- its output reports "SCF Algorithm Type is DF" and
-# "Blend: DEF2-UNIVERSAL-JKFIT" -- so PySCF is told to use it too rather than
-# silently differ.  It was optimized for def2-QZVPP and is the one JK set for
-# every def2 basis; there is no diffuse-augmented version for def2-QZVPPD.
+# Coulomb/exchange fitting basis for density-fitted SCF.  Weigend's universal JK
+# set is what Psi4 blends by default for the def2 family and for vDZP -- its
+# output reports "SCF Algorithm Type is DF" and "Blend: DEF2-UNIVERSAL-JKFIT" --
+# so PySCF is told to use it too rather than silently differ.  It was optimized
+# for def2-QZVPP and is the one JK set for every def2 basis; there is no
+# diffuse-augmented version for def2-QZVPPD.
+#
+# For a Dunning or Pople basis Psi4 picks a JKFIT set of its own (cc-pVXZ-JKFIT,
+# aug-cc-pVXZ-JKFIT, heavy-aug-cc-pVDZ-JKFIT) and is left to.  With an augmented
+# basis it fits small anions better with its own set than with this one: at
+# wB97M-V/aug-cc-pVTZ the deprotonation energy of water is off by 0.013 kcal/mol
+# against 0.115, and at 6-31+G* that of ammonia by 0.003 against 0.073.  Plain
+# cc-pVTZ-JKFIT is the worse of the two (HF 0.154 against 0.001), but a basis
+# without diffuse functions is no basis for an anion.  PySCF uses this set for
+# every basis and does not need the augmented ones (water 0.010 at aug-cc-pVTZ),
+# so for those bases the two backends fit differently.
 #
 # Accuracy, measured against conventional four-centre integrals at
 # wB97M-V/def2-QZVPPD: a few hundredths of a kcal/mol on absolute energies
