@@ -1,8 +1,9 @@
 """FastPCM (tautomator.pyscf_fast_pcm) against PySCF's own PCM.
 
 Each function FastPCM replaces is compared with PySCF's at the same input, then whole
-SCF, gradient and Hessian runs.  Only PySCF, NumPy and SciPy are needed, so the file also
-runs against other PySCF releases; see the module docstring for adding one to CHECKED.
+SCF, gradient and Hessian runs.  To check another PySCF release, run this file in an
+environment with tautomator's dependencies and that release; see the module docstring for
+adding one to CHECKED.
 """
 
 from __future__ import annotations
@@ -16,6 +17,9 @@ from pyscf import dft, gto, scf
 from pyscf.solvent import pcm
 from pyscf.solvent.grad import pcm as pcm_grad
 
+# Import applies the NumPy 2.4 einsum fix PySCF < 2.12 needs for density-fitted gradients
+# (test_scf_and_gradient_match_stock), as in production
+import tautomator.pyscf_runner  # noqa: F401
 from tautomator import pyscf_fast_pcm
 from tautomator.pyscf_fast_pcm import (
     CHECKED,
@@ -95,8 +99,8 @@ def densities() -> dict[str, Any]:
     return out
 
 
-def _same(a: Any, b: Any, scale: float = 1.0) -> None:
-    np.testing.assert_allclose(a, b, rtol=1e-9, atol=1e-11 * scale)
+def _same(a: Any, b: Any) -> None:
+    np.testing.assert_allclose(a, b, rtol=1e-9, atol=1e-11)
 
 
 # ---------------------------------------------------------------------------
@@ -151,6 +155,8 @@ class TestReplacedFunctions:
         assert type(ws) is FastPCM
         assert (ws.method, ws.eps) == ("C-PCM", 32.7)
         np.testing.assert_array_equal(ws.radii_table, pcm.modified_Bondi * 1.1)
+        assert use_fast_pcm(mf)  # a second call leaves it a FastPCM
+        assert type(mf.with_solvent) is FastPCM
 
 
 # ---------------------------------------------------------------------------

@@ -171,6 +171,19 @@ score. All three drivers implement the same three operations (`single_point`,
   with PySCF's PCM. It replaces six PySCF functions and checks their source
   against the releases it was tested on (2.7.0-2.14.0); on any other version
   PySCF's own PCM runs.
+
+  Most of that speedup comes from keeping the surface integrals (k|mn) in
+  memory, which FastPCM does only when they fit in half of what
+  `[compute] memory_gb` leaves after the memory the process already holds.
+  They grow with the cube of molecule size: at wB97X-3c/vDZP they take 0.37 GB
+  for acetaminophen (11 heavy atoms), 2.0 GB for lidocaine (17) and 12 GB for
+  imatinib (37), so at the default `memory_gb = 4` lidocaine is about the
+  largest molecule that keeps them. Without them the SCF runs at PySCF's speed
+  and only the gradient stays faster: acetaminophen took 44 s with the
+  integrals left out, against 17 s with them kept and 48 s with PySCF's PCM. A
+  larger `memory_gb` raises the limit, if the machine has the memory. On macOS
+  PySCF cannot measure the memory the process holds, so the whole half is
+  available; on Linux it can, so the limit there is lower.
 - **`"psi4"`.** Subprocess driver, writes input decks and parses output. The
   `psi4` executable comes from a pixi environment of its own
   (`pixi install -e psi4`); tautomator never imports Psi4. Implicit solvent
@@ -528,7 +541,8 @@ Next, in order:
 
 1. **IEF-PCM gradients in refinement on both backends** (done): psi4-swig-pcm
    for Psi4, and FastPCM for PySCF, whose stock PCM tripled the cost of an SCF.
-   Solvated minimization works on Psi4 and stays cheap on PySCF.
+   Solvated minimization works on Psi4 and stays cheap on PySCF while the
+   surface integrals fit in memory (see the PySCF driver above).
 2. **Run MNSol solutes** (≤10 heavy atoms, ≤2 rotatable bonds; 418 solutes,
    103 of them ions) in water, 1-octanol and hexadecane.
 3. **Fit the non-electrostatic correction** on that set.

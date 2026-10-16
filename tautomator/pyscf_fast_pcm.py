@@ -11,11 +11,14 @@ Stock PCM recomputes the surface integrals (k|mn) every SCF iteration, contracts
 numpy.einsum and does two dense solves with K.  FastPCM takes the cavity, K and R from
 PCM.build unchanged, then, once per geometry, LU-factors K and (when they fit in half of the
 memory left) stores the integrals packed, so an iteration is two BLAS products and two LU
-solves.  Its gradient computes PySCF's grad_qv term from one pass of libcint's
-int1e_grids_ip: a Gaussian charge of exponent xi^2 is a point charge under rinv_zeta = xi^2,
-so the points sharing a xi are the grid of one one-electron operator (the formulation of
-gpu4pyscf's int3c1e kernels), where PySCF uses int3c2e_ip1 and int3c2e_ip2 over one fake
-s shell per point.
+solves.  When they don't fit, _get_v and _get_vmat are PySCF's, which recompute them every
+iteration, so the SCF runs at stock speed (the README has sizes by molecule).
+
+Its gradient computes PySCF's grad_qv term from one pass of libcint's int1e_grids_ip: a
+Gaussian charge of exponent xi^2 is a point charge under rinv_zeta = xi^2, so the points
+sharing a xi are the grid of one one-electron operator (the formulation of gpu4pyscf's
+int3c1e kernels), where PySCF uses int3c2e_ip1 and int3c2e_ip2 over one fake s shell per
+point.
 
 FastPCM replaces six PySCF functions (REPLACED).  use_fast_pcm switches a PCM to it only
 when the source of every one of them matches a version FastPCM was checked against
@@ -129,10 +132,13 @@ def unchecked_functions() -> tuple[str, ...]:
 def use_fast_pcm(mf: Any) -> bool:
     """Switch mf.with_solvent from pyscf.solvent.pcm.PCM to FastPCM, keeping its settings.
 
-    Does nothing (returns False) for another solvent model (SMD and ddCOSMO included) or when
-    the installed PySCF has an unchecked version of a REPLACED function.
+    Returns whether mf.with_solvent is a FastPCM now.  Does nothing for another solvent model
+    (SMD and ddCOSMO included), for one that is a FastPCM already, or when the installed PySCF
+    has an unchecked version of a REPLACED function.
     """
     ws: Any = getattr(mf, "with_solvent", None)
+    if type(ws) is FastPCM:
+        return True
     if type(ws) is not pcm.PCM or unchecked_functions():
         return False
     ws.__class__ = FastPCM

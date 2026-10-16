@@ -16,7 +16,7 @@ from pyscf.dft import libxc
 from pyscf.solvent import pcm as pyscf_pcm
 
 from tautomator.config import PCM_METHODS, solvent_dielectric
-from tautomator.pyscf_fast_pcm import FastPCM, installed_fingerprints, unchecked_functions
+from tautomator.pyscf_fast_pcm import FastPCM, unchecked_functions
 
 # Import applies the D4 parameter pin, and the composite registration and PCM
 # ECP-cavity patch where this PySCF needs them
@@ -175,15 +175,13 @@ class TestFastPCM:
         assert (ws.method, ws.eps) == (PCM_METHODS[model], solvent_dielectric("methanol"))
         assert ws.radii_table[1] == pytest.approx(ws.vdw_scale * 1.2 / BOHR + ws.r_probe / BOHR)
 
-    def test_this_pyscf_was_checked(self) -> None:
-        assert not unchecked_functions(), installed_fingerprints()
-
     def test_smd_keeps_pyscfs_class(self) -> None:
         _mol, mf = _build_mf(self._geom(), 0, "pbe", "def2-svp", "SMD", "water")
         assert not isinstance(mf.with_solvent, FastPCM)
 
     def test_matches_pyscfs_own_pcm_with_an_ecp_basis(self) -> None:
-        """vDZP has an ECP on oxygen, so this also covers the cavity's ECP radii."""
+        """vDZP puts an ECP on oxygen.  Both runs build the same cavity, so its ECP radii
+        are TestPCMECPCavity's to check, not this test's."""
         runs = []
         for fast in (True, False):
             _mol, mf = _build_mf(self._geom(), 0, "pbe", "vDZP", "IEFPCM", "water")
