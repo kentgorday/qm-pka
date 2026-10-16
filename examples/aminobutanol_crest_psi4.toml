@@ -3,15 +3,11 @@
 #
 # Three-stage workflow:
 #   1. Sampling   — CREST physics-based tautomer/charge enum + conformers (GFN2-xTB)
-#   2. Refinement — gas-phase geometry optimization (wB97X-3c/vDZP), then one
-#                   IEF-PCM single point on that geometry + xTB RRHO
-#   3. Scoring    — single-point energy (wB97M-V/def2-QZVPPD + IEFPCM)
+#   2. Refinement — geometry optimization (wB97X-3c/vDZP + IEF-PCM) + xTB RRHO
+#   3. Scoring    — single-point energy (wB97M-V/def2-QZVPPD + IEF-PCM)
 #
-# Note: Psi4 lacks analytical PCM gradients, so it minimizes in gas phase.
-# Solvation still enters the refinement filter, as a single point on the
-# optimized geometry ([refinement] solvation = "single_point", the default
-# here); without it the filter would rank on gas energies and rerank badly
-# against solvated scoring.
+# Psi4's IEF-PCM comes from psi4-swig-pcm (installed by `pixi install -e psi4`):
+# PySCF's model with analytical gradients, so it minimizes in solvent.
 
 [molecule]
 smiles = "CC(O)C(N)C"
@@ -27,12 +23,12 @@ prescreen_mode = "quick"
 full_mode = "default"
 
 [refinement]
-# Psi4 defaults: wB97X-3c / vDZP, gas minimization + an IEF-PCM single point
+# Psi4 defaults: wB97X-3c / vDZP, minimized in IEF-PCM
 ewin = 8.0
 rrho = "xtb"
 
 [scoring]
-# Psi4 defaults: wB97M-V / def2-QZVPPD / IEFPCM
+# Psi4 defaults: wB97M-V / def2-QZVPPD / IEF-PCM
 ewin = 10.0
 
 [compute]

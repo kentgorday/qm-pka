@@ -105,9 +105,9 @@ def score(
 
                     surviving.append(conf)
                 except Exception as e:
-                    # Includes the PCM cavity case: psi4_runner refuses to run a
-                    # solvated job when no tessera area yields a valid cavity,
-                    # rather than returning a converged but meaningless energy.
+                    # Includes a cavity psi4-swig-pcm refuses (S not positive-
+                    # definite): the solvated Psi4 job fails rather than
+                    # returning a converged but meaningless energy.
                     # Scoring does not deduplicate, so this conformer may be a
                     # representative standing for several collapsed structures;
                     # multiplicity records how many states go with it.

@@ -88,7 +88,8 @@ class TestDriverDefaults:
         assert (cfg.scoring.method, cfg.scoring.basis) == ("wB97M-V", "def2-QZVPPD")
         assert cfg.scoring.solvent_model == "IEFPCM"
 
-    def test_psi4_adds_a_single_point_instead(self, tmp_toml: Callable[[str], Path]) -> None:
+    def test_psi4_minimizes_in_solvent_too(self, tmp_toml: Callable[[str], Path]) -> None:
+        # psi4-swig-pcm gives Psi4 analytical PCM gradients as well.
         cfg = load_config(
             tmp_toml("""
             [molecule]
@@ -97,7 +98,7 @@ class TestDriverDefaults:
             driver = "psi4"
         """)
         )
-        assert cfg.refinement.solvation == "single_point"
+        assert cfg.refinement.solvation == "optimize"
         assert cfg.scoring.solvent_model == "IEFPCM"
 
     def test_gas_phase_scoring_makes_refinement_gas_phase(
@@ -338,18 +339,34 @@ class TestSolvationValidation:
             """)
             )
 
-    def test_psi4_cannot_minimize_in_solvent(self, tmp_toml: Callable[[str], Path]) -> None:
-        with pytest.raises(ValueError, match="no analytical PCM gradients"):
-            load_config(
-                tmp_toml("""
-                [molecule]
-                smiles = "CCO"
-                [refinement]
-                solvation = "optimize"
-                [compute]
-                driver = "psi4"
-            """)
-            )
+    def test_psi4_takes_a_single_point_on_request(self, tmp_toml: Callable[[str], Path]) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            solvation = "single_point"
+            [compute]
+            driver = "psi4"
+        """)
+        )
+        assert cfg.refinement.solvation == "single_point"
+
+    @pytest.mark.parametrize("model", ["IEFPCM", "PCM", "CPCM", "COSMO"])
+    def test_psi4_offers_the_pyscf_pcm_models(
+        self, tmp_toml: Callable[[str], Path], model: str
+    ) -> None:
+        cfg = load_config(
+            tmp_toml(f"""
+            [molecule]
+            smiles = "CCO"
+            [scoring]
+            solvent_model = "{model}"
+            [compute]
+            driver = "psi4"
+        """)
+        )
+        assert cfg.scoring.solvent_model == model
 
     def test_solvated_refinement_with_gas_scoring_raises(
         self, tmp_toml: Callable[[str], Path]
@@ -859,12 +876,12 @@ class TestExampleConfigs:
         "name,driver,engine,solvation",
         [
             ("glycine_pyscf", "pyscf", "pyscf", "optimize"),
-            ("glycine_psi4", "psi4", "psi4", "single_point"),
+            ("glycine_psi4", "psi4", "psi4", "optimize"),
             ("glycine_orbmol", "pyscf", "orbmol", "single_point"),
             ("aminobutanol_crest_pyscf", "pyscf", "pyscf", "optimize"),
-            ("aminobutanol_crest_psi4", "psi4", "psi4", "single_point"),
+            ("aminobutanol_crest_psi4", "psi4", "psi4", "optimize"),
             ("aminobutanol_rdkit_pyscf", "pyscf", "pyscf", "optimize"),
-            ("aminobutanol_rdkit_psi4", "psi4", "psi4", "single_point"),
+            ("aminobutanol_rdkit_psi4", "psi4", "psi4", "optimize"),
         ],
     )
     def test_loads(self, name: str, driver: str, engine: str, solvation: str) -> None:

@@ -21,7 +21,13 @@ from typing import Any
 
 import numpy as np
 
-from tautomator.config import AUX_DIFFUSE_S, AUXBASIS, DEFAULT_MEMORY_GB
+from tautomator.config import (
+    AUX_DIFFUSE_S,
+    AUXBASIS,
+    DEFAULT_MEMORY_GB,
+    PCM_METHODS,
+    solvent_dielectric,
+)
 from tautomator.geometric_logging import geometric_quiet
 from tautomator.types import Geometry
 
@@ -503,20 +509,13 @@ def _build_mf(
         from pyscf import solvent as pyscf_solvent
 
         solvent_model_upper = solvent_model.upper().replace("-", "")
-        # Map user-facing names to the analytical PCM "method" string.
-        pcm_method_map = {
-            "PCM": "IEF-PCM",
-            "IEFPCM": "IEF-PCM",
-            "CPCM": "C-PCM",
-            "COSMO": "COSMO",
-        }
         if solvent_model_upper == "SMD":
             mf = pyscf_solvent.SMD(mf)
             mf.with_solvent.solvent = solvent
-        elif solvent_model_upper in pcm_method_map:
+        elif solvent_model_upper in PCM_METHODS:
             mf = pyscf_solvent.PCM(mf)
-            mf.with_solvent.method = pcm_method_map[solvent_model_upper]
-            mf.with_solvent.eps = _solvent_dielectric(solvent)
+            mf.with_solvent.method = PCM_METHODS[solvent_model_upper]
+            mf.with_solvent.eps = solvent_dielectric(solvent)
             # Cavity radii: PySCF's default is modified_Bondi (H=1.10); override
             # the hydrogen radius with the user value.  radii_table holds the
             # final (already vdw_scale-scaled) radii, so replicate that formula.
@@ -530,10 +529,10 @@ def _build_mf(
             ws.radii_table = ws.vdw_scale * rad + ws.r_probe / _radii.BOHR
         elif solvent_model_upper == "DDPCM":
             mf = pyscf_solvent.ddPCM(mf)
-            mf.with_solvent.eps = _solvent_dielectric(solvent)
+            mf.with_solvent.eps = solvent_dielectric(solvent)
         elif solvent_model_upper == "DDCOSMO":
             mf = pyscf_solvent.ddCOSMO(mf)
-            mf.with_solvent.eps = _solvent_dielectric(solvent)
+            mf.with_solvent.eps = solvent_dielectric(solvent)
         else:
             raise ValueError(f"Unknown PySCF solvent model: {solvent_model!r}")
 
@@ -716,30 +715,3 @@ def frequencies(
     results = harmonic_analysis(mol, hessian, imaginary_freq=False)
     freqs_cm: Any = results["freq_wavenumber"]
     return [float(f) for f in freqs_cm]
-
-
-# Common solvent dielectric constants
-_DIELECTRIC: dict[str, float] = {
-    "water": 78.39,
-    "methanol": 32.7,
-    "ethanol": 24.55,
-    "dmso": 46.7,
-    "acetonitrile": 37.5,
-    "thf": 7.58,
-    "toluene": 2.38,
-    "chloroform": 4.81,
-    "dichloromethane": 8.93,
-    "hexane": 1.88,
-    "acetone": 20.7,
-}
-
-
-def _solvent_dielectric(solvent: str) -> float:
-    """Look up dielectric constant for a solvent name."""
-    key = solvent.lower()
-    if key not in _DIELECTRIC:
-        raise ValueError(
-            f"Unknown solvent {solvent!r} for dielectric lookup. "
-            f"Known solvents: {', '.join(sorted(_DIELECTRIC))}"
-        )
-    return _DIELECTRIC[key]

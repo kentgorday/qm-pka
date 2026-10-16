@@ -160,16 +160,16 @@ score. All three drivers implement the same three operations (`single_point`,
 `scoring.py` are backend-agnostic.
 
 - **`"pyscf"` (default).** In-process Python library. Supports analytical PCM
-  gradients (IEF-PCM, the default; C-PCM) and SMD, so it is the only backend that
-  can *minimize* in implicit solvent. Of the 3c composites it implements only
-  wB97X-3c.
+  gradients (IEF-PCM, the default; C-PCM, COSMO) and SMD. Of the 3c composites
+  it implements only wB97X-3c.
 - **`"psi4"`.** Subprocess driver, writes input decks and parses output. The
   `psi4` executable comes from a pixi environment of its own
-  (`pixi install -e psi4`); tautomator never imports Psi4.
-  **No analytical PCM gradients**, so `refinement.solvation = "optimize"` is
-  refused; it minimizes in gas phase and adds one PCM single point on that
-  geometry. Offers all five 3c composites (wB97X-3c, r2SCAN-3c, B97-3c,
-  PBEh-3c, HF-3c).
+  (`pixi install -e psi4`); tautomator never imports Psi4. Implicit solvent
+  comes from [psi4-swig-pcm](https://github.com/kentgorday/psi4-swig-pcm),
+  installed in that environment: PySCF's switching/Gaussian PCM (same surface,
+  radii and models) with analytical gradients, so Psi4 minimizes in solvent too,
+  and its solvation energies match PySCF's to <1e-5 kcal/mol at the same level.
+  Offers all five 3c composites (wB97X-3c, r2SCAN-3c, B97-3c, PBEh-3c, HF-3c).
 - **OrbMol-v2 (refinement only).** The machine-learned potential from
   orb-models (Apache-2.0 code and weights), trained on gas-phase
   wB97M-V/def2-TZVPD data (OMol25 + OPoly26), with total charge and spin as
@@ -217,9 +217,9 @@ kcal/mol (0.39 pKa) — which is why neither protocol does.
 matters most for the window, because the refinement filter decides what scoring
 ever sees:
 
-- `"optimize"` — minimize in implicit solvent. PySCF only; the default there.
+- `"optimize"` — minimize in implicit solvent. The default on both DFT drivers.
 - `"single_point"` — minimize in gas phase, then one solvated single point on
-  that geometry. The default on Psi4 and for OrbMol. For DFT this is one extra
+  that geometry. The default for OrbMol. For DFT this is one extra
   job, since the optimizer already produced the gas-phase energy; for OrbMol it
   is a DFT pair (solvated and gas) at `solvation_method`/`solvation_basis`,
   which default to wB97X-3c/vDZP.
@@ -434,34 +434,23 @@ The set of things that look weird and aren't. Read before "fixing":
   has no analytical D4 Hessian, but VV10 *is* analytical. Vibrational
   frequencies are insensitive to the dispersion correction, so this is a free
   speedup.
-- **Psi4 + PCM avoidance.** Psi4 has no analytical PCM gradients;
-  optimization with implicit solvent is impractically slow. The config
-  loader warns. Either run Psi4 gas-phase or use PySCF.
-- **Every Psi4 PCM job pre-screens its cavity.** PCMSolver's two validity
-  checks — Gauss' theorem on the nuclear surface charge, and positive-
-  definiteness of the single-layer operator — are fatal upstream but patched to
-  warnings in this build, so Psi4 exits 0 and returns a meaningless energy
-  (this corrupted 324 of 941 conformers in the first training batch, one by
-  22,000 kcal/mol). So `_run_psi4` reads stderr on *success* too, and a cheap
-  HF/STO-3G probe checks the cavity before each real job: the checks depend
-  only on geometry, radii and area, never on the wavefunction, so a minimal
-  basis gives the same verdict for ~1% of the cost. On failure it *searches*
-  `_TESSERA_AREA_LADDER` rather than refining, because validity is not
-  monotonic in area — observed invalid bands at 0.10–0.12 and 0.25–0.40, and
-  one molecule needed a **coarser** area than the 0.1 default. The ladder stops
-  at **0.15** on accuracy, not stability: a coarse cavity can pass both of
-  PCMSolver's checks and still integrate the surface badly, which would swap a
-  detectable failure for a silent one. Measured against the 0.1 default over 37
-  conformers (charges −2…+2, 4–19 atoms), the worst deviation is 0.10 kcal/mol
-  at area 0.15 but 0.24 at 0.18 and 0.40 at 0.30 — and it is overwhelmingly a
-  *cationic* effect, an order of magnitude worse at q=+1/+2 than for neutrals
-  and anions, since protonated species carry the most hydrogens and hydrogen
-  spheres get the fewest tesserae at a fixed area. Conformers with no valid
-  cavity at or below 0.15 are dropped rather than served from a coarser grid.
-  Not applied to
-  PySCF: it discretizes with Lebedev grids plus a switching function rather
-  than GePol tesserae, and showed no failure on any of the 941, nor under 20x
-  grid degradation.
+- **Psi4's PCM is psi4-swig-pcm, not PCMSolver.** Psi4's built-in PCMSolver
+  has no gradients (Psi4 then takes finite differences of energies), and its
+  GePol cavities failed its own validity checks — Gauss' theorem on the nuclear
+  surface charge, positive-definiteness of the single-layer operator — on 324 of
+  941 conformers of the first training batch. Those checks are patched to
+  warnings in the build used here, so Psi4 exited 0 with meaningless energies
+  (one off by 22,000 kcal/mol), and keeping them out took a cavity probe and a
+  tessera-area search before every job. psi4-swig-pcm uses PySCF's smooth
+  switching/Gaussian surface instead, which has no tessellation to fail and
+  showed no failure on any of the 941. It still refuses a cavity whose S matrix
+  is not positive-definite (the job fails and the conformer is dropped), and
+  `_run_psi4` passes on its warning when the nuclear surface charge misses
+  Gauss' law by more than 1%. It is LGPL-3.0 like Psi4, so it lives in a
+  repository of its own; psi4_runner's input decks import it, and
+  `psi4_swig_pcm.enable()` routes Psi4's own `energy`, `optimize` and
+  `frequency` through it (frequencies by finite differences of the analytical
+  PCM gradient).
 - **Geometry optimizer fallback (PySCF).** TRIC internal coordinates first
   (100 steps); on non-convergence, restart in Cartesian coordinates from the
   last geometry (another 100 steps). Analogous to Psi4 optking's

@@ -1,7 +1,8 @@
-"""Tests for the Psi4 DFT runner, focusing on the PCM cavity radii."""
+"""Tests for the Psi4 DFT runner: input decks, scratch, the executable, and the PCM."""
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
 import tempfile
@@ -11,10 +12,8 @@ import numpy as np
 import pytest
 
 from tautomator import psi4_runner, refinement, scoring
-from tautomator.config import DEFAULT_MEMORY_GB
+from tautomator.config import DEFAULT_MEMORY_GB, solvent_dielectric
 from tautomator.psi4_runner import (
-    _MODIFIED_BONDI_RADII,
-    _PCM_RADII_SCALING,
     _df_basis_block,
     _pcm_block,
     _run_psi4,
@@ -31,59 +30,59 @@ def _water() -> Geometry:
     )
 
 
-class TestModifiedBondiRadii:
-    def test_equals_pyscf_modified_bondi(self) -> None:
-        # Single source of truth: the hardcoded Psi4 table must be EXACTLY
-        # PySCF's modified_Bondi (same elements and values) so both backends
-        # build the same cavity.  Dev/test environments have both installed; the
-        # Psi4 runtime itself never imports PySCF.
-        pcm = pytest.importorskip("pyscf.solvent.pcm")
-        from pyscf import gto
-        from pyscf.data import radii
-
-        pyscf_table = {
-            gto.elements.ELEMENTS[z]: round(pcm.modified_Bondi[z] * radii.BOHR, 4)
-            for z in range(1, len(pcm.modified_Bondi))
-            if pcm.modified_Bondi[z] > 0
-        }
-        assert pyscf_table == _MODIFIED_BONDI_RADII
-
-    def test_hydrogen_is_modified(self) -> None:
-        assert _MODIFIED_BONDI_RADII["H"] == 1.10  # not Bondi's 1.20
-
-
 class TestPCMBlock:
-    def test_emits_explicit_prescaled_spheres(self) -> None:
-        block = _pcm_block("IEFPCM", "water", _water())
-        assert "Mode = Explicit" in block
-        assert "RadiiSet" not in block  # explicit spheres replace the named set
-        # Radii are pre-scaled (Explicit mode applies no scaling):
-        assert f"{1.52 * _PCM_RADII_SCALING:.6f}" in block  # O -> 1.824000
-        assert f"{1.10 * _PCM_RADII_SCALING:.6f}" in block  # H -> 1.320000
+    """The input lines that turn psi4-swig-pcm on, with the model pyscf_runner builds."""
+
+    @pytest.mark.parametrize(
+        ("model", "method"),
+        [
+            ("IEFPCM", "IEF-PCM"),
+            ("PCM", "IEF-PCM"),
+            ("CPCM", "C-PCM"),
+            ("C-PCM", "C-PCM"),
+            ("COSMO", "COSMO"),
+        ],
+    )
+    def test_names_the_model(self, model: str, method: str) -> None:
+        assert f"method={method!r}" in _pcm_block(model, "water")
+
+    def test_dielectric_is_the_one_pyscf_gets(self) -> None:
+        assert f"eps={solvent_dielectric('methanol')!r}" in _pcm_block("IEFPCM", "Methanol")
 
     def test_hydrogen_radius_is_a_free_parameter(self) -> None:
-        # H radius is user-settable (default 1.10); other elements are unaffected.
-        custom = _pcm_block("IEFPCM", "water", _water(), pcm_hydrogen_radius=1.30)
-        assert f"{1.30 * _PCM_RADII_SCALING:.6f}" in custom  # H -> 1.560000
-        assert f"{1.52 * _PCM_RADII_SCALING:.6f}" in custom  # O unchanged
-        default = _pcm_block("IEFPCM", "water", _water())
-        assert f"{1.10 * _PCM_RADII_SCALING:.6f}" in default  # H -> 1.320000
+        assert "modified_bondi_radii(hydrogen=1.1)" in _pcm_block("IEFPCM", "water")
+        assert "modified_bondi_radii(hydrogen=1.3)" in _pcm_block("IEFPCM", "water", 1.3)
 
-    def test_block_not_indented(self) -> None:
-        # Regression: dedent once left "pcm = {" indented -> Psi4 IndentationError.
-        block = _pcm_block("IEFPCM", "water", _water())
-        assert block.startswith("pcm = {")
-        assert "\n  Units = Angstrom" in block
+    def test_is_python(self) -> None:
+        block = _pcm_block("IEFPCM", "water")
+        compile(block, "<pcm block>", "exec")
+        assert "psi4_swig_pcm.enable(psi4_swig_pcm.PCMSettings(" in block
 
-    def test_unknown_element_raises(self) -> None:
-        # The table covers H-Lr (Z<=103); a superheavy beyond it raises clearly.
-        geom = Geometry(symbols=("Rf",), coords=np.array([[0.0, 0.0, 0.0]]))
-        with pytest.raises(ValueError, match="modified-Bondi radius"):
-            _pcm_block("IEFPCM", "water", geom)
+    def test_unknown_model_or_solvent_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown Psi4 solvent model"):
+            _pcm_block("SMD", "water")
+        with pytest.raises(ValueError, match="Unknown solvent"):
+            _pcm_block("IEFPCM", "ammonia")
 
-    def test_full_periodic_table_coverage(self) -> None:
-        # Parity with PySCF: every element PySCF defines must be present here.
-        assert len(_MODIFIED_BONDI_RADII) == 103  # H..Lr
+    def test_every_job_enables_it_before_computing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        inputs: list[str] = []
+
+        def fake_run(input_text: str, work_dir: Path, **_kwargs: object) -> str:
+            inputs.append(input_text)
+            (work_dir / "optimized.xyz").write_text("3\n\nO 0 0 0\nH 0 0 1\nH 0 1 0\n")
+            (work_dir / "frequencies.dat").write_text("")
+            return "=== FINAL ENERGY: -1.000000000000 ===\n=== CONVERGED: 1 ===\n"
+
+        monkeypatch.setattr(psi4_runner, "_run_psi4", fake_run)
+        solvated = ("PBE0", "def2-SVP", "IEFPCM", "water")
+        psi4_runner.single_point(_water(), 0, *solvated)
+        psi4_runner.optimize(_water(), 0, *solvated)
+        psi4_runner.frequencies(_water(), 0, *solvated)
+        psi4_runner.single_point(_water(), 0, "PBE0", "def2-SVP")
+        for text, job in zip(inputs[:3], ("energy(", "optimize(", "frequency("), strict=True):
+            assert text.index("psi4_swig_pcm.enable(") < text.index(job)
+            assert "pcm true" not in text  # Psi4's own PCMSolver stays off
+        assert "psi4_swig_pcm" not in inputs[3]
 
 
 def _thioacetate() -> Geometry:
@@ -335,82 +334,68 @@ class TestPsi4Executable:
 
 
 # ---------------------------------------------------------------------------
-# PCM cavity validity
+# PCM diagnostics, and real Psi4 jobs in implicit solvent
 # ---------------------------------------------------------------------------
-def test_pcm_block_emits_the_requested_tessera_area() -> None:
-    """The area must reach the input deck; a silent default would make the
-    cavity search a no-op that still reports success."""
-    geom = Geometry(
-        symbols=("O", "H", "H"),
-        coords=np.array([[0.0, 0.0, 0.0], [0.9572, 0.0, 0.0], [-0.24, 0.9266, 0.0]]),
-    )
-    default = psi4_runner._pcm_block("IEFPCM", "water", geom)
-    custom = psi4_runner._pcm_block("IEFPCM", "water", geom, area=0.05)
-    assert f"Area = {psi4_runner.DEFAULT_TESSERA_AREA}" in default
-    assert "Area = 0.05" in custom
-
-
-def test_run_psi4_rejects_a_suppressed_pcm_error(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+def test_run_psi4_passes_on_a_gauss_law_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """PCMSolver's cavity checks are patched to warnings in this build, so a
-    job can exit 0 with a meaningless energy.  Exit status alone must not be
-    treated as success."""
+    """psi4-swig-pcm only warns on a Gauss's-law violation; it must not vanish with stderr."""
 
     class _Result:
         returncode = 0
         stdout = ""
-        stderr = (
-            "Absolute value of the relative difference between the Gauss' theorem "
-            "(-15.7959) and computed (-16.0515) values of the total nuclear ASC "
-            "higher than threshold (0.0161811).\n"
-            "Normally an error, this has been commuted to a warning via patch.\n"
-        )
+        stderr = "PCM nuclear surface charge violates Gauss's law by 1.20e-02 (...)\n"
 
     monkeypatch.setattr(psi4_runner, "psi4_executable", lambda: tmp_path / "psi4")
     monkeypatch.setattr("tautomator.psi4_runner.subprocess.run", lambda *a, **k: _Result())
     (tmp_path / "output.dat").write_text("=== FINAL ENERGY: -1.0 ===")
-    with pytest.raises(RuntimeError, match="invalid cavity"):
+    with caplog.at_level(logging.WARNING):
         psi4_runner._run_psi4("", tmp_path)
+    assert "violates Gauss's law by 1.20e-02" in caplog.text
 
 
-def test_choose_tessera_area_prefers_the_default_and_falls_back(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A healthy geometry costs one probe; an unhealthy one searches the ladder
-    rather than refining blindly, because validity is not monotonic in area."""
-    geom = Geometry(
-        symbols=("O", "H", "H"),
-        coords=np.array([[0.0, 0.0, 0.0], [0.9572, 0.0, 0.0], [-0.24, 0.9266, 0.0]]),
-    )
-    psi4_runner._cavity_cache.clear()
-    monkeypatch.setattr(psi4_runner, "_cavity_is_valid", lambda *a, **k: True)
-    assert psi4_runner.choose_tessera_area(geom, 0, "IEFPCM", "water") == (
-        psi4_runner.DEFAULT_TESSERA_AREA
+def _formate() -> Geometry:
+    return Geometry(
+        symbols=("C", "O", "O", "H"),
+        coords=np.array(
+            [[0.0, 0.0, 0.52], [1.13, 0.0, -0.05], [-1.13, 0.0, -0.05], [0.0, 0.0, 1.66]]
+        ),
     )
 
-    tried: list[float] = []
 
-    def _only_third_works(*args: object, **kwargs: object) -> bool:
-        tried.append(args[5] if len(args) > 5 else kwargs["area"])  # type: ignore[arg-type]
-        return len(tried) == 3
-
-    psi4_runner._cavity_cache.clear()
-    monkeypatch.setattr(psi4_runner, "_cavity_is_valid", _only_third_works)
-    chosen = psi4_runner.choose_tessera_area(geom, 0, "IEFPCM", "water")
-    assert chosen == tried[2]
-    assert tried[0] == psi4_runner.DEFAULT_TESSERA_AREA
+def _require_psi4() -> None:
+    try:
+        psi4_executable()
+    except FileNotFoundError:
+        pytest.skip("no psi4 environment (pixi install -e psi4)")
 
 
-def test_choose_tessera_area_raises_when_no_area_works(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Better a dropped conformer than a converged, meaningless energy."""
-    geom = Geometry(
-        symbols=("O", "H", "H"),
-        coords=np.array([[0.0, 0.0, 0.0], [0.9572, 0.0, 0.0], [-0.24, 0.9266, 0.0]]),
-    )
-    psi4_runner._cavity_cache.clear()
-    monkeypatch.setattr(psi4_runner, "_cavity_is_valid", lambda *a, **k: False)
-    with pytest.raises(RuntimeError, match="No usable PCM cavity"):
-        psi4_runner.choose_tessera_area(geom, 0, "IEFPCM", "water")
+@pytest.mark.slow
+def test_solvation_energy_matches_pyscf(isolated_tmpdir: Path) -> None:
+    """Both drivers build the same PCM: same surface, radii, dielectric and model."""
+    _require_psi4()
+    from tautomator import pyscf_runner
+
+    level = ("PBE0", "def2-SVP")
+    solvation = {}
+    for name, driver in (("psi4", psi4_runner), ("pyscf", pyscf_runner)):
+        e_pcm = driver.single_point(_formate(), -1, *level, "IEFPCM", "water", threads=4)
+        e_gas = driver.single_point(_formate(), -1, *level, threads=4)
+        solvation[name] = (e_pcm - e_gas) * 627.509474
+    assert solvation["psi4"] < -60.0  # an anion in water
+    # measured < 1e-5 kcal/mol (PCMSolver, Psi4's own PCM, was ~0.15 off)
+    assert abs(solvation["psi4"] - solvation["pyscf"]) < 1e-3, solvation
+
+
+@pytest.mark.slow
+def test_optimizes_and_takes_frequencies_in_solvent(isolated_tmpdir: Path) -> None:
+    """Analytical PCM gradients: optking minimizes in solvent, frequencies are real."""
+    _require_psi4()
+    solvated = ("HF", "def2-SVP", "IEFPCM", "water")
+    start = psi4_runner.single_point(_water(), 0, *solvated, threads=4)
+    geom, energy, converged = psi4_runner.optimize(_water(), 0, *solvated, threads=4)
+    assert converged
+    assert energy < start
+    freqs = psi4_runner.frequencies(geom, 0, *solvated, threads=4)
+    assert len(freqs) == 3
+    assert all(f > 1000.0 for f in freqs)

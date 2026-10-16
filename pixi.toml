@@ -3,6 +3,9 @@ channels = ["conda-forge"]
 name = "tautomator"
 platforms = ["linux-64", "osx-arm64"]
 version = "0.1.0"
+# psi4-swig-pcm (the psi4 feature) is a conda package built from its git source,
+# which pixi still treats as a preview feature (0.66).
+preview = ["pixi-build"]
 
 [system-requirements]
 # The Accelerate BLAS selected under [target.osx-arm64.dependencies] is built
@@ -107,7 +110,14 @@ dm-tree = ">=0.1.8"
 # import (7.1 removed functionals that 1.10 builds into its table).
 [feature.psi4.dependencies]
 python = "3.13.*"
+# psi4-swig-pcm is compiled against Psi4's C++ classes and run-exports the Psi4
+# it was built with, which holds this to 1.11.x.
 psi4 = ">=1.11,<2"
+# Implicit solvent: psi4_runner's input decks import it.  The same
+# switching/Gaussian PCM as PySCF's, with analytical gradients (LGPL-3.0, like
+# Psi4, hence a repository of its own).  Built from source by pixi-build; the
+# commit is pinned in pixi.lock, and `pixi update psi4-swig-pcm` moves it.
+psi4-swig-pcm = { git = "https://github.com/kentgorday/psi4-swig-pcm.git" }
 # What Psi4 calls for -D3, -D4 and the gCP term of the 3c composites.
 dftd3-python = ">=1.0"
 dftd4-python = ">=4.0"

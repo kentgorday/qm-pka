@@ -130,18 +130,57 @@ COMPOSITE_BASIS: dict[str, str] = {
 # is supported for now"); Psi4 has all five.
 PYSCF_COMPOSITES = {"wb97x-3c"}
 
+# The analytical PCM models: user-facing name ([scoring] solvent_model) -> the
+# name both drivers' solvers take.  Both drivers run the same switching/Gaussian
+# PCM: PySCF its own pyscf.solvent.pcm, Psi4 psi4-swig-pcm, which reproduces it
+# (same surface, radii and discretization; Hartree-Fock solvation energies agree
+# to 1e-9 Eh and gradients to 5e-8 Eh/bohr) and adds analytical gradients to Psi4.
+PCM_METHODS: dict[str, str] = {
+    "PCM": "IEF-PCM",
+    "IEFPCM": "IEF-PCM",
+    "CPCM": "C-PCM",
+    "COSMO": "COSMO",
+}
+
 # Implicit-solvent models, by the driver that can run them.  One model is used
 # for every solvation energy in a run, so the refinement filter ranks on the
-# same physics scoring does.  Both drivers default to IEF-PCM, which agrees
-# across them to ~0.15 kcal/mol.  PySCF's SS(V)PE is not offered: it symmetrizes
-# the system matrix, and on PySCF's surface that moved the solvation energy of
-# acetate and methylammonium by 2.7 and 4.2 kcal/mol and did not converge with
-# the surface grid (the ill behaviour Lange & Herbert describe, Chem. Phys.
-# Lett. 509, 77).
+# same physics scoring does.  Both drivers default to IEF-PCM.  SS(V)PE is not
+# offered: it symmetrizes the system matrix, and on this surface that moved the
+# solvation energy of acetate and methylammonium by 2.7 and 4.2 kcal/mol and did
+# not converge with the surface grid (the ill behaviour Lange & Herbert
+# describe, Chem. Phys. Lett. 509, 77).
 _SOLVENT_MODELS: dict[str, set[str]] = {
-    "pyscf": {"IEFPCM", "PCM", "CPCM", "COSMO", "SMD", "DDPCM", "DDCOSMO"},
-    "psi4": {"IEFPCM", "CPCM"},
+    "pyscf": {*PCM_METHODS, "SMD", "DDPCM", "DDCOSMO"},
+    "psi4": set(PCM_METHODS),
 }
+
+# Dielectric constants for the PCM models, by lower-case solvent name; both
+# drivers take them from here.
+SOLVENT_DIELECTRIC: dict[str, float] = {
+    "water": 78.39,
+    "methanol": 32.7,
+    "ethanol": 24.55,
+    "dmso": 46.7,
+    "acetonitrile": 37.5,
+    "thf": 7.58,
+    "toluene": 2.38,
+    "chloroform": 4.81,
+    "dichloromethane": 8.93,
+    "hexane": 1.88,
+    "acetone": 20.7,
+}
+
+
+def solvent_dielectric(solvent: str) -> float:
+    """Look up the dielectric constant for a solvent name."""
+    key = solvent.lower()
+    if key not in SOLVENT_DIELECTRIC:
+        raise ValueError(
+            f"Unknown solvent {solvent!r} for dielectric lookup. "
+            f"Known solvents: {', '.join(sorted(SOLVENT_DIELECTRIC))}"
+        )
+    return SOLVENT_DIELECTRIC[key]
+
 
 # The solvation single point for an OrbMol refinement: OrbMol has no implicit
 # solvent, so the term comes from a cheap DFT pair (PCM and gas) on the
@@ -430,9 +469,9 @@ def _default_basis(method: str) -> str:
 def _default_solvation(engine: str, scoring: ScoringConfig) -> Solvation:
     if scoring.solvent_model is None:
         return "none"  # gas-phase scoring: the filter must rank on gas energies too
-    # PySCF has analytical PCM gradients, so it can minimize in solvent; Psi4
-    # cannot, and OrbMol has no implicit solvent at all.
-    return "optimize" if engine == "pyscf" else "single_point"
+    # Both DFT drivers have analytical PCM gradients, so they minimize in solvent;
+    # OrbMol has no implicit solvent at all.
+    return "optimize" if engine in ("pyscf", "psi4") else "single_point"
 
 
 def _validate(ref: RefinementConfig, scoring: ScoringConfig, compute: ComputeConfig) -> None:
@@ -472,13 +511,6 @@ def _validate(ref: RefinementConfig, scoring: ScoringConfig, compute: ComputeCon
                 "[refinement] solvation_method/solvation_basis apply only to an OrbMol "
                 "refinement; DFT refinement takes its solvation single point at the "
                 "refinement level, reusing the optimizer's gas-phase energy."
-            )
-        if ref.engine == "psi4" and ref.solvation == "optimize":
-            raise ValueError(
-                "[refinement] solvation = 'optimize' is not supported on the psi4 "
-                "driver: Psi4 has no analytical PCM gradients, so minimization in "
-                "implicit solvent falls back to finite-difference gradients. Use "
-                "'single_point', or switch [compute] driver to pyscf."
             )
 
     if ref.solvation != "none" and scoring.solvent_model is None:
