@@ -7062,7 +7062,7 @@ packages:
 - pypi: ./
   name: tautomator
   version: 0.1.0
-  sha256: 2f24d6da8d624c9d5b115a0290e4e1b71ed4e89851a424740132f41ccda102cc
+  sha256: 2f5bd447028cd64f5381a73f9462a6c96533c75f9a6d747822ff440cd7aff8c7
   requires_python: '>=3.13'
 - conda: https://conda.anaconda.org/conda-forge/linux-64/tbb-2023.1.0-haa8c3ee_2.conda
   sha256: 5e47c01ea6c2bea041b78b4e45b3135b80bfc015533ec44e4c2d2326a755f8ba

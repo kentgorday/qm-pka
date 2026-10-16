@@ -527,6 +527,11 @@ def _build_mf(
             rad = _pcm.modified_Bondi.copy()
             rad[1] = pcm_hydrogen_radius / _radii.BOHR
             ws.radii_table = ws.vdw_scale * rad + ws.r_probe / _radii.BOHR
+            # The same model, several times faster; left as PySCF's own PCM on a PySCF
+            # whose PCM internals FastPCM was not checked against.
+            from tautomator.pyscf_fast_pcm import use_fast_pcm
+
+            use_fast_pcm(mf)
         elif solvent_model_upper == "DDPCM":
             mf = pyscf_solvent.ddPCM(mf)
             mf.with_solvent.eps = solvent_dielectric(solvent)

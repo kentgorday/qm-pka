@@ -19,6 +19,7 @@ module = [
     "rdkit.*",
     "pyscf.*",
     "pyscf",
+    "scipy.*",
     "basis_set_exchange",
     "dftd4.*",
     "orb_models.*",

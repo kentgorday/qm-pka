@@ -164,7 +164,13 @@ score. All three drivers implement the same three operations (`single_point`,
 
 - **`"pyscf"` (default).** In-process Python library. Supports analytical PCM
   gradients (IEF-PCM, the default; C-PCM, COSMO) and SMD. Of the 3c composites
-  it implements only wB97X-3c.
+  it implements only wB97X-3c. The PCM models run through FastPCM
+  (`tautomator/pyscf_fast_pcm.py`): PySCF's own PCM, cavity and results, with
+  the per-geometry work kept between SCF iterations. A wB97X-3c/vDZP energy and
+  gradient in IEF-PCM water costs 1.2-1.3x the gas-phase job, against 3.3-4.5x
+  with PySCF's PCM. It replaces six PySCF functions and checks their source
+  against the releases it was tested on (2.7.0-2.14.0); on any other version
+  PySCF's own PCM runs.
 - **`"psi4"`.** Subprocess driver, writes input decks and parses output. The
   `psi4` executable comes from a pixi environment of its own
   (`pixi install -e psi4`); tautomator never imports Psi4. Implicit solvent
@@ -520,9 +526,9 @@ cavity, because CMIRS's published parameters do not transfer to it.
 
 Next, in order:
 
-1. **IEF-PCM gradients in refinement on both backends**: psi4-swig-pcm for Psi4,
-   and a faster PCM for PySCF, whose stock PCM triples the cost of an SCF.
-   Solvated minimization then works on Psi4 and stays cheap on PySCF.
+1. **IEF-PCM gradients in refinement on both backends** (done): psi4-swig-pcm
+   for Psi4, and FastPCM for PySCF, whose stock PCM tripled the cost of an SCF.
+   Solvated minimization works on Psi4 and stays cheap on PySCF.
 2. **Run MNSol solutes** (≤10 heavy atoms, ≤2 rotatable bonds; 418 solutes,
    103 of them ions) in water, 1-octanol and hexadecane.
 3. **Fit the non-electrostatic correction** on that set.

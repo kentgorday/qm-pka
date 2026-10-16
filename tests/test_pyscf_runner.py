@@ -11,7 +11,12 @@ import sys
 import numpy as np
 import pytest
 from pyscf import dft, gto
+from pyscf.data.radii import BOHR
 from pyscf.dft import libxc
+from pyscf.solvent import pcm as pyscf_pcm
+
+from tautomator.config import PCM_METHODS, solvent_dielectric
+from tautomator.pyscf_fast_pcm import FastPCM, installed_fingerprints, unchecked_functions
 
 # Import applies the D4 parameter pin, and the composite registration and PCM
 # ECP-cavity patch where this PySCF needs them
@@ -146,6 +151,51 @@ class TestPCMECPCavity:
         # nuclear charge in both.  Without the fix the vDZP (ECP) cavity differs
         # (oxygen's switching radius collapses to carbon's), changing the count.
         assert self._cavity_npts("vDZP") == self._cavity_npts("def2-svp")
+
+
+# ---------------------------------------------------------------------------
+# FastPCM (tautomator.pyscf_fast_pcm) for the PCM models
+# ---------------------------------------------------------------------------
+class TestFastPCM:
+    """The PCM models get FastPCM where it was checked against this PySCF, with the same
+    settings and results as PySCF's own PCM.  tests/test_pyscf_fast_pcm.py has the rest."""
+
+    @staticmethod
+    def _geom() -> Geometry:
+        return Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array([[0.0, 0.0, 0.1173], [0.0, 0.7572, -0.4692], [0.0, -0.7572, -0.4692]]),
+        )
+
+    @pytest.mark.parametrize("model", list(PCM_METHODS))
+    def test_pcm_models_get_fast_pcm(self, model: str) -> None:
+        _mol, mf = _build_mf(self._geom(), 0, "pbe", "def2-svp", model, "methanol", 1.2)
+        ws = mf.with_solvent
+        assert (type(ws) is FastPCM) == (not unchecked_functions())
+        assert (ws.method, ws.eps) == (PCM_METHODS[model], solvent_dielectric("methanol"))
+        assert ws.radii_table[1] == pytest.approx(ws.vdw_scale * 1.2 / BOHR + ws.r_probe / BOHR)
+
+    def test_this_pyscf_was_checked(self) -> None:
+        assert not unchecked_functions(), installed_fingerprints()
+
+    def test_smd_keeps_pyscfs_class(self) -> None:
+        _mol, mf = _build_mf(self._geom(), 0, "pbe", "def2-svp", "SMD", "water")
+        assert not isinstance(mf.with_solvent, FastPCM)
+
+    def test_matches_pyscfs_own_pcm_with_an_ecp_basis(self) -> None:
+        """vDZP has an ECP on oxygen, so this also covers the cavity's ECP radii."""
+        runs = []
+        for fast in (True, False):
+            _mol, mf = _build_mf(self._geom(), 0, "pbe", "vDZP", "IEFPCM", "water")
+            if not fast:
+                mf.with_solvent.__class__ = pyscf_pcm.PCM
+                mf.with_solvent.reset()
+            mf.conv_tol, mf.conv_tol_grad = 1e-11, 1e-7
+            mf.kernel()
+            runs.append((mf.e_tot, mf.with_solvent.e, mf.nuc_grad_method().kernel()))
+        (e1, s1, g1), (e0, s0, g0) = runs
+        assert abs(e1 - e0) < 1e-9 and abs(s1 - s0) < 1e-9
+        np.testing.assert_allclose(g1, g0, atol=1e-7)
 
 
 # ---------------------------------------------------------------------------
