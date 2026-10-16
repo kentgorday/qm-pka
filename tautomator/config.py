@@ -311,7 +311,7 @@ PROTOCOLS: dict[str, dict[str, dict[str, Any]]] = {
     "high_quality": {
         "sampling": {"ewin": 10.0},
         # Minimized in IEF-PCM on either driver, so refinement ranks on the
-        # physics scoring uses.  Gas-phase scoring needs solvation = "none".
+        # physics scoring uses (gas phase if scoring is; see _fit_preset_solvation).
         "refinement": {"method": "wB97X-3c", "solvation": "optimize", "ewin": 8.0, "rrho": "xtb"},
         "scoring": {"method": "wB97M-V", "basis": "def2-QZVPPD", "ewin": 10.0},
     },
@@ -365,6 +365,7 @@ def load_config(path: Path) -> PkaConfig:
 
     ref_raw, score_raw, compute_raw = section("refinement"), section("scoring"), section("compute")
     _migrate(ref_raw, score_raw, compute_raw, mol_raw)
+    _fit_preset_solvation(ref_raw, raw.get("refinement", {}), score_raw)
 
     molecule = MoleculeConfig(
         smiles=mol_raw["smiles"],
@@ -678,6 +679,27 @@ def _warn_no_diffuse(scoring: ScoringConfig) -> None:
             "zwitterions and 0.7-0.9 for ammonium ions (0.5-2.0 pKa), and def2-SVP "
             "above def2-SVPD by 4-16. Use an augmented set such as def2-TZVPPD."
         )
+
+
+def _fit_preset_solvation(
+    ref_raw: dict[str, Any], own: dict[str, Any], score_raw: dict[str, Any]
+) -> None:
+    """Drop a preset's solvation settings where they no longer apply.
+
+    A preset's [refinement] solvation and solvation_prefilter_ewin assume solvated
+    scoring and the preset's own solvation mode.  With gas-phase scoring,
+    refinement is gas-phase too, as it is without a preset; and a prefilter the
+    file did not set goes whenever there is no solvation single point to skip.
+    TOML cannot unset a preset's key, so without this a preset could not be run
+    gas-phase at all.  Anything written in the file still wins.
+    """
+    model = score_raw.get("solvent_model")
+    gas_scoring = isinstance(model, str) and model.lower() == "none"
+    if gas_scoring and "solvation" not in own:
+        ref_raw.pop("solvation", None)
+    single_point = ref_raw.get("solvation", "single_point") == "single_point"
+    if "solvation_prefilter_ewin" not in own and (gas_scoring or not single_point):
+        ref_raw.pop("solvation_prefilter_ewin", None)
 
 
 def _migrate(

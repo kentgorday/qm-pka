@@ -209,25 +209,54 @@ class TestProtocols:
         assert cfg.scoring.solvent_model == "IEFPCM"
 
     @pytest.mark.parametrize("protocol", ["high_quality", "fast"])
-    def test_gas_phase_scoring_needs_solvation_none(
-        self, protocol: str, tmp_toml: Callable[[str], Path]
+    @pytest.mark.parametrize("own_solvation", ["", 'solvation = "none"'])
+    def test_gas_phase_scoring_makes_the_preset_gas_phase(
+        self, protocol: str, own_solvation: str, tmp_toml: Callable[[str], Path]
     ) -> None:
-        # Both presets name a solvated refinement, which a gas-phase run must undo.
-        text = f"""
+        # As without a preset; fast's solvation pre-filter goes with its single point.
+        cfg = load_config(
+            tmp_toml(f"""
             protocol = "{protocol}"
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            {own_solvation}
+            [scoring]
+            solvent_model = "none"
+        """)
+        )
+        assert cfg.scoring.solvent_model is None
+        assert cfg.refinement.solvation == "none"
+        assert cfg.refinement.solvation_prefilter_ewin is None
+
+    def test_fast_without_its_single_point_drops_the_prefilter(
+        self, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        cfg = load_config(
+            tmp_toml("""
+            protocol = "fast"
+            [molecule]
+            smiles = "CCO"
+            [refinement]
+            solvation = "none"
+        """)
+        )
+        assert cfg.refinement.solvation == "none"
+        assert cfg.refinement.solvation_prefilter_ewin is None
+
+    def test_settings_written_in_the_file_still_win(self, tmp_toml: Callable[[str], Path]) -> None:
+        gas_fast = """
+            protocol = "fast"
             [molecule]
             smiles = "CCO"
             [scoring]
             solvent_model = "none"
+            [refinement]
         """
-        with pytest.raises(ValueError, match="solvation = 'none'"):
-            load_config(tmp_toml(text))
-        if protocol == "fast":
-            return  # its solvation_prefilter_ewin cannot be unset from TOML
-        cfg = load_config(
-            tmp_toml(text + '            [refinement]\n            solvation = "none"\n')
-        )
-        assert cfg.refinement.solvation == "none"
+        with pytest.raises(ValueError, match="computes a solvation energy"):
+            load_config(tmp_toml(gas_fast + '            solvation = "single_point"\n'))
+        with pytest.raises(ValueError, match="only applies to solvation = 'single_point'"):
+            load_config(tmp_toml(gas_fast + "            solvation_prefilter_ewin = 12.0\n"))
 
     def test_file_overrides_preset(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(

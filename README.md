@@ -198,7 +198,10 @@ which *physics* goes into each energy term; the runners decide how to get it
 (analytic vs finite-difference Hessians, grids, cavity construction).
 
 A top-level `protocol` key fills in every level of theory and window at once;
-anything written in the file wins over the preset.
+anything written in the file wins over the preset. With gas-phase scoring
+(`[scoring] solvent_model = "none"`), a preset's refinement is gas-phase too, as
+it is without a preset, and `fast` drops its solvation pre-filter along with
+the single point it skips.
 
 | | `high_quality` | `fast` |
 |---|---|---|
