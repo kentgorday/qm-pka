@@ -58,9 +58,9 @@ def make_toml(
     ``protocol`` picks every level of theory and energy window (see PROTOCOLS in
     tautomator/config.py); ``driver`` runs the DFT -- scoring always, and refinement
     too unless the protocol refines with OrbMol.  Solvation is the protocol's
-    business rather than this script's: it knows that PySCF can minimize in
-    implicit solvent and Psi4 cannot, and that OrbMol has no implicit solvent
-    and needs a separate single point.
+    business rather than this script's: it knows that both DFT drivers minimize
+    in implicit solvent, and that OrbMol has no implicit solvent and needs a
+    separate single point.
     """
     safe_smi = smi.replace('"', '\\"')
     return f'''\

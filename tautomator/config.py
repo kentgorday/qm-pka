@@ -303,11 +303,16 @@ class PkaConfig:
 # ---------------------------------------------------------------------------
 # Defaults only: any key written in the file wins.  "fast" is ~5x cheaper than
 # "high_quality" and, measured against it on training-set molecules, agrees to
-# ~0.05 pKa at the scoring level and <=0.01 pKa on the refinement window.
+# ~0.05 pKa at the scoring level and <=0.01 pKa on the refinement window.  Those
+# figures, and both refinement windows, date from when "high_quality" refined
+# on gas-phase geometries (Psi4, with a solvated single point); they have not
+# been re-measured with solvated minimization.
 PROTOCOLS: dict[str, dict[str, dict[str, Any]]] = {
     "high_quality": {
         "sampling": {"ewin": 10.0},
-        "refinement": {"method": "wB97X-3c", "ewin": 8.0, "rrho": "xtb"},
+        # Minimized in IEF-PCM on either driver, so refinement ranks on the
+        # physics scoring uses.  Gas-phase scoring needs solvation = "none".
+        "refinement": {"method": "wB97X-3c", "solvation": "optimize", "ewin": 8.0, "rrho": "xtb"},
         "scoring": {"method": "wB97M-V", "basis": "def2-QZVPPD", "ewin": 10.0},
     },
     "fast": {

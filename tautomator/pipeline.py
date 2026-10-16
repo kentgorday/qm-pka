@@ -29,11 +29,11 @@ _RESUMABLE_STAGES = ("refinement", "sampling")
 def _find_resume_point(output_dir: Path, smiles: str) -> tuple[Ensemble, str] | None:
     """Return (ensemble, stage_name) for the latest completed stage, or None.
 
-    The schema version and ``input_smiles`` are validated.  A stage's
-    ensemble.json records the
-    *sampling* settings (they are written once and carried forward unchanged),
-    so nothing on disk says which method/basis produced refined geometries —
-    resuming after editing [refinement] would silently mix levels of theory.
+    The schema version and ``input_smiles`` are validated.  The refinement
+    checkpoint also records the refinement settings (``settings["refinement"]``),
+    but they are not compared with the current config: resuming after editing
+    [refinement], or after one of its defaults changed, silently mixes levels of
+    theory.
     The SMILES check still catches the dangerous case: output directories are
     numbered by CSV row, so editing the training set shifts them and would
     otherwise resume one molecule's run against another's data.

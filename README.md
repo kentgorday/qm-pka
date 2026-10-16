@@ -46,9 +46,12 @@ transitions), while swapping xTB for OrbMol in gas phase shifts it by 0.71
 kcal/mol sd. Against a wB97X-3c gas Hessian on 10 small transitions, OrbMol is
 the better *gas* Hessian by about 4x (sd 0.19 vs 0.81) — but a gas Hessian is
 the wrong ensemble, and xTB is the only one of the two that can carry the
-solvent. `rrho = "refinement"` on the Psi4 driver is allowed and warns loudly:
-Psi4 has no analytical Hessian for these functionals, so each conformer costs
-~6N gradient calculations, usually more than the optimization it follows.
+solvent. With DFT refinement in solvent (`solvation = "optimize"`),
+`rrho = "refinement"` is a DFT Hessian in implicit solvent on either driver.
+On the Psi4 driver it is allowed and warns loudly: Psi4 has no analytical
+Hessian for these functionals, so each conformer costs ~6N gradient
+calculations (analytical PCM gradients, through psi4-swig-pcm), usually more
+than the optimization it follows.
 
 Scoring never recomputes RRHO; the refinement value carries through.
 
@@ -201,13 +204,16 @@ anything written in the file wins over the preset.
 |---|---|---|
 | sampling `ewin` | 10 | 15 |
 | refinement | wB97X-3c/vDZP | OrbMol-v2 |
-| refinement solvation | driver's best (see below) | wB97X-3c/vDZP single point |
+| refinement solvation | minimized in IEF-PCM | wB97X-3c/vDZP single point |
 | refinement `ewin` | 8 | 6 |
 | scoring | wB97M-V/def2-QZVPPD | wB97M-V/def2-TZVPPD |
 | cost (40-molecule training set) | ~74 d | ~15–21 d |
 
 `fast` agrees with `high_quality` to ~0.05 pKa at the scoring level and ≤0.01
-pKa on the refinement window, on training-set molecules. The basis step
+pKa on the refinement window, on training-set molecules. That comparison, the
+costs above and both refinement windows date from when `high_quality` refined
+on gas-phase geometries (Psi4, with a solvated single point); they have not
+been re-measured with solvated minimization. The basis step
 QZVPPD → TZVPPD is nearly free (offset −0.20, scatter 0.08 kcal/mol over 22
 transitions); `high_quality` keeps QZVPPD because that is what wB97M-V's
 authors recommend. Dropping VV10 is *not* free — wB97X-D3BJ scatters 0.74
@@ -228,9 +234,11 @@ ever sees:
   testing, and conformers inside a 6 kcal/mol *solvated* window sat up to 9.1
   kcal/mol above the gas-phase minimum.
 
-With solvation in the filter, refinement ranks the way scoring does (Spearman
-1.00 against a scoring-level reference) and a 6 kcal/mol window keeps 95% of
-the scored set at 0 pKa cost.
+Measured on gas-phase geometries with a solvated single point, refinement
+ranked the way scoring does (Spearman 1.00 against a scoring-level reference)
+and a 6 kcal/mol window kept 95% of the scored set at 0 pKa cost. Minimizing in
+solvent puts refinement on the same physics as scoring, so it should do at
+least as well, but the windows have not been re-tuned for it.
 
 `refinement.solvation_prefilter_ewin` is an optional cost control for that
 single point: conformers already this far above the charge state's gas-phase

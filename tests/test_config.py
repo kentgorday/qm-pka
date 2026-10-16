@@ -192,6 +192,43 @@ class TestProtocols:
         assert cfg.refinement.ewin == 8.0
         assert (cfg.scoring.method, cfg.scoring.basis) == ("wB97M-V", "def2-QZVPPD")
 
+    @pytest.mark.parametrize("driver", ["pyscf", "psi4"])
+    def test_high_quality_minimizes_in_solvent(
+        self, driver: str, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        cfg = load_config(
+            tmp_toml(f"""
+            protocol = "high_quality"
+            [molecule]
+            smiles = "CCO"
+            [compute]
+            driver = "{driver}"
+        """)
+        )
+        assert cfg.refinement.solvation == "optimize"
+        assert cfg.scoring.solvent_model == "IEFPCM"
+
+    @pytest.mark.parametrize("protocol", ["high_quality", "fast"])
+    def test_gas_phase_scoring_needs_solvation_none(
+        self, protocol: str, tmp_toml: Callable[[str], Path]
+    ) -> None:
+        # Both presets name a solvated refinement, which a gas-phase run must undo.
+        text = f"""
+            protocol = "{protocol}"
+            [molecule]
+            smiles = "CCO"
+            [scoring]
+            solvent_model = "none"
+        """
+        with pytest.raises(ValueError, match="solvation = 'none'"):
+            load_config(tmp_toml(text))
+        if protocol == "fast":
+            return  # its solvation_prefilter_ewin cannot be unset from TOML
+        cfg = load_config(
+            tmp_toml(text + '            [refinement]\n            solvation = "none"\n')
+        )
+        assert cfg.refinement.solvation == "none"
+
     def test_file_overrides_preset(self, tmp_toml: Callable[[str], Path]) -> None:
         cfg = load_config(
             tmp_toml("""
