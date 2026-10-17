@@ -13,7 +13,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from tautomator import refinement
+from tautomator import refinement, xtb_runner
 from tautomator.config import RefinementConfig
 from tautomator.ensemble import HARTREE_TO_KCAL
 from tautomator.types import ChargeState, Conformer, Ensemble, Geometry, Microstate
@@ -302,3 +302,47 @@ class TestGasPhaseRefinement:
         (conf,) = ens.charge_states[0].microstates[0].conformers
         assert conf.solvation_energy is None
         assert driver.count("single_point") == 0
+
+
+class TestXtbRrhoSolvent:
+    """The xtb RRHO goes in the run's solvent, and in the gas phase for a run
+    scored in the gas phase: a gas-phase free energy with an ALPB RRHO term
+    would carry part of the solvation free energy it is the reference for."""
+
+    @pytest.mark.parametrize(
+        ("solvation", "solvent_model", "expected"),
+        [("optimize", "IEFPCM", "woctanol"), ("none", None, None)],
+    )
+    def test_follows_the_scoring_phase(
+        self,
+        patch_drivers: Any,
+        monkeypatch: pytest.MonkeyPatch,
+        solvation: str,
+        solvent_model: str | None,
+        expected: str | None,
+    ) -> None:
+        # Minimizing in solvent also takes the gas-phase energy at the minimum.
+        patch_drivers(FakeDriver(opt=[-76.40], gas={0.0: -76.39}))
+        seen: list[str | None] = []
+
+        def fake_frequencies(*a: Any, solvent: str | None = None, **kw: Any) -> list[float]:
+            seen.append(solvent)
+            return list(FREQS)
+
+        monkeypatch.setattr(xtb_runner, "frequencies", fake_frequencies)
+        cfg = RefinementConfig(
+            method="wB97X-3c",
+            basis="vDZP",
+            solvation=solvation,  # type: ignore[arg-type]
+            rrho="xtb",
+            ewin=100.0,
+            engine="pyscf",
+        )
+        refinement.refine(
+            ensemble_of([-76.40]),
+            cfg,
+            driver="pyscf",
+            solvent="woctanol",
+            solvent_model=solvent_model,
+        )
+        assert seen == [expected]

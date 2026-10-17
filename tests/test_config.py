@@ -1011,3 +1011,35 @@ class TestAlpbName:
             coords=np.array([[0.0, 0.0, 0.117], [0.0, 0.757, -0.469], [0.0, -0.757, -0.469]]),
         )
         assert xtb_runner.single_point(water, solvent=solvent) < 0
+
+
+class TestFixedSpecies:
+    def test_off_by_default(self, tmp_toml: Callable[[str], Path]) -> None:
+        assert not load_config(tmp_toml('[molecule]\nsmiles = "CCO"\n')).sampling.fixed_species
+
+    def test_needs_one_charge_state(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="charge_min = charge_max"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CC(=O)O"
+                charge_min = -1
+                charge_max = 0
+                [sampling]
+                fixed_species = true
+            """)
+            )
+
+    def test_needs_rdkit_first(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="approach = 'rdkit_first'"):
+            load_config(
+                tmp_toml("""
+                [molecule]
+                smiles = "CCO"
+                charge_min = 0
+                charge_max = 0
+                [sampling]
+                approach = "crest_first"
+                fixed_species = true
+            """)
+            )

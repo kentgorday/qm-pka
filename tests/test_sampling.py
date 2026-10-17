@@ -235,3 +235,39 @@ def test_crest_first_takes_a_single_atom_without_a_search(monkeypatch: pytest.Mo
     (ms,) = ensemble.charge_states[0].microstates
     (conf,) = ms.conformers
     assert conf.rrho_correction == 0.0
+
+
+class TestFixedSpecies:
+    """MNSol and similar data fix the species, so a run must not add tautomers
+    or charge-separated protomers whose weights would change the answer."""
+
+    @staticmethod
+    def _sampled_species(monkeypatch: pytest.MonkeyPatch, fixed: bool) -> list[str]:
+        """Species run_approach1 searches for glycine, with every program stubbed."""
+
+        def one_conformer(geom: Geometry, **kwargs: object) -> list[Conformer]:
+            return [Conformer(geometry=geom, electronic_energy=-1.0)]
+
+        monkeypatch.setattr(sampling, "optimize", lambda g, **kw: (g, True))
+        monkeypatch.setattr(sampling, "single_point", lambda g, **kw: -1.0)
+        monkeypatch.setattr(sampling, "conformer_search", one_conformer)
+        monkeypatch.setattr(
+            sampling, "repair_migrated_conformers", lambda cs, stage: MigrationReport()
+        )
+        monkeypatch.setattr(
+            sampling, "_dedupe_add_rrho_and_filter", lambda confs, *a, **kw: list(confs)
+        )
+        ensemble = sampling.run_approach1(
+            "NCC(=O)O", charge_range=(0, 0), solvent="water", fixed_species=fixed
+        )
+        return sorted(ms.tautomer_id for ms in ensemble.charge_states[0].microstates)
+
+    def test_only_the_input_is_sampled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert self._sampled_species(monkeypatch, fixed=True) == ["NCC(=O)O"]
+
+    def test_otherwise_the_zwitterion_joins_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert "[NH3+]CC(=O)[O-]" in self._sampled_species(monkeypatch, fixed=False)
+
+    def test_another_charge_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="at its own charge"):
+            sampling.run_approach1("NCC(=O)O", charge_range=(-1, -1), fixed_species=True)

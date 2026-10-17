@@ -220,7 +220,15 @@ A top-level `protocol` key fills in every level of theory and window at once;
 anything written in the file wins over the preset. With gas-phase scoring
 (`[scoring] solvent_model = "none"`), a preset's refinement is gas-phase too, as
 it is without a preset, and `fast` drops its solvation pre-filter along with
-the single point it skips.
+the single point it skips. A gas-phase run uses no solvent anywhere: sampling
+and the xtb RRHO are gas-phase as well, so its free energy can serve as the gas
+end of a solvation free energy, and `[molecule] solvent` is unused.
+
+`[sampling] fixed_species = true` takes the input SMILES as the only species:
+no tautomers, no charge-separated protomers, and `charge_min = charge_max` at
+its own charge. It is for reference data that fix the species, such as MNSol,
+where adding forms the measurement did not see would change the answer; it
+needs `approach = "rdkit_first"`.
 
 | | `high_quality` | `fast` |
 |---|---|---|
@@ -351,9 +359,8 @@ Scripts (`scripts/`):
   Dissociation-Constants dataset.
 - `select_mnsol_set.py` — MNSol solutes and reference free energies in water,
   water-saturated 1-octanol and n-hexadecane, for fitting the nonelectrostatic
-  correction.
-  Neither MNSol nor its output (`mnsol_set.csv`) is tracked, as for the IUPAC
-  data: both are distributed under their own licenses.
+  correction. Neither MNSol nor its output (`mnsol_set.csv`) is tracked, as
+  for the IUPAC data: both are distributed under their own licenses.
 - `approach1_rdkit_first.py`, `approach2_crest_first.py` — sampling-only
   entry points (no DFT).
 

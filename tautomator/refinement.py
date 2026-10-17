@@ -79,7 +79,8 @@ def refine(
         # Outside the per-conformer handlers below, which would record a model
         # that cannot be loaded as each conformer's own optimization failure.
         engine.preload(config.method)
-    xtb_solvent = solvent if config.rrho == "xtb" else None
+    # xtb's RRHO in the run's solvent, or in the gas phase for a gas-phase run.
+    xtb_solvent = solvent if config.rrho == "xtb" and solvent_model is not None else None
 
     for cs in ensemble.charge_states.values():
         log.info(f"Refining charge state q={cs.charge}...")

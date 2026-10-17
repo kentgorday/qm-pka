@@ -86,8 +86,12 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
 
     # One solvent for the whole run: xTB's ALPB during sampling and xtb-level
     # RRHO, and the implicit-solvent model at refinement and scoring.  A run
-    # that mixed them would filter on one solvent and score in another.
+    # that mixed them would filter on one solvent and score in another.  A run
+    # scored in the gas phase uses none: it samples in the gas phase too (and
+    # refine() computes its RRHO there), so its free energy is a gas-phase one
+    # throughout, as the reference state of a solvation free energy must be.
     solvent = config.molecule.solvent
+    sampling_solvent = solvent if config.scoring.solvent_model is not None else None
     provenance = config.provenance()
 
     resumed_from: str | None = None
@@ -115,18 +119,19 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
             ensemble = run_approach1(
                 smiles=config.molecule.smiles,
                 charge_range=config.molecule.charge_range,
-                solvent=solvent,
+                solvent=sampling_solvent,
                 crest_mode=config.sampling.crest_mode,
                 ewin=config.sampling.ewin,
                 threads=config.compute.threads,
                 max_tautomers=config.sampling.max_tautomers,
                 max_transforms=config.sampling.max_transforms,
+                fixed_species=config.sampling.fixed_species,
             )
         else:
             ensemble = run_approach2(
                 smiles=config.molecule.smiles,
                 charge_range=config.molecule.charge_range,
-                solvent=solvent,
+                solvent=sampling_solvent,
                 prescreen_mode=config.sampling.prescreen_mode,
                 full_mode=config.sampling.full_mode,
                 prescreen_ewin=config.sampling.prescreen_ewin,

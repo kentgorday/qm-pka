@@ -255,23 +255,32 @@ def _dedupe_add_rrho_and_filter(
 def run_approach1(
     smiles: str,
     charge_range: tuple[int, int],
-    solvent: str = "water",
+    solvent: str | None = "water",
     crest_mode: str = "default",
     ewin: float = 6.0,
     threads: int | None = None,
     max_tautomers: int = 1000,
     max_transforms: int = 1000,
+    fixed_species: bool = False,
 ) -> Ensemble:
     """Sampling via approach 1 (RDKit-first).
 
     Enumerates tautomers and protonation/deprotonation sites in SMILES space,
-    then runs CREST conformer searches on each labeled microstate.
+    then runs CREST conformer searches on each labeled microstate.  With
+    ``fixed_species`` the input is the only species (its stereoisomers aside),
+    and ``charge_range`` must be its own charge.  ``solvent`` None samples in the
+    gas phase.
 
     Returns an Ensemble with xTB-level energies (no weights assigned).
     """
     validate_input_smiles(smiles)
     ref_charge = get_formal_charge(smiles)
     ref_smiles = canonical_smiles(smiles)
+    if fixed_species and charge_range != (ref_charge, ref_charge):
+        raise ValueError(
+            f"fixed_species samples {ref_smiles} at its own charge, {ref_charge}; "
+            f"got the charge range {charge_range}"
+        )
 
     log.info(f"Input: {ref_smiles} (charge {ref_charge})")
     log.info(f"Charge range: {charge_range[0]} to {charge_range[1]}")
@@ -286,15 +295,20 @@ def run_approach1(
             "charge_range": list(charge_range),
             "max_tautomers": max_tautomers,
             "max_transforms": max_transforms,
+            "fixed_species": fixed_species,
         },
     )
 
     # Step 1: Enumerate tautomers at reference charge
-    log.info(f"Enumerating tautomers at reference charge {ref_charge}...")
-    ref_tautomers = enumerate_tautomers(
-        ref_smiles, max_tautomers=max_tautomers, max_transforms=max_transforms
-    )
-    log.info(f"  Found {len(ref_tautomers)} tautomer(s) at charge {ref_charge}")
+    if fixed_species:
+        ref_tautomers = [ref_smiles]
+        log.info("Fixed species: no tautomers or charge-separated protomers")
+    else:
+        log.info(f"Enumerating tautomers at reference charge {ref_charge}...")
+        ref_tautomers = enumerate_tautomers(
+            ref_smiles, max_tautomers=max_tautomers, max_transforms=max_transforms
+        )
+        log.info(f"  Found {len(ref_tautomers)} tautomer(s) at charge {ref_charge}")
 
     # Step 2: For each target charge, enumerate species and conformer-search each
     for q in range(charge_range[0], charge_range[1] + 1):
@@ -309,8 +323,9 @@ def run_approach1(
             # all, and an amino acid's zwitterion, its dominant neutral form in
             # water, is never a microstate. Not tautomerised further: these are
             # derived from every reference tautomer already.
-            for tau in ref_tautomers:
-                species_at_q.update(charge_separated_variants(tau))
+            if not fixed_species:
+                for tau in ref_tautomers:
+                    species_at_q.update(charge_separated_variants(tau))
         else:
             # BFS from all reference tautomers to target charge
             species_at_q = set()
@@ -475,7 +490,7 @@ def _run_crest_pipeline_for_stereoisomer(
     geom_3d: Geometry,
     ref_charge: int,
     charge_range: tuple[int, int],
-    solvent: str,
+    solvent: str | None,
     prescreen_mode: str,
     full_mode: str,
     prescreen_ewin: float,
@@ -641,7 +656,7 @@ def _run_crest_pipeline_for_stereoisomer(
 def run_approach2(
     smiles: str,
     charge_range: tuple[int, int],
-    solvent: str = "water",
+    solvent: str | None = "water",
     prescreen_mode: str = "quick",
     full_mode: str = "default",
     prescreen_ewin: float = 6.0,

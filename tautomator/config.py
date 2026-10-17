@@ -270,7 +270,9 @@ class MoleculeConfig:
     smiles: str
     charge_min: int = -1
     charge_max: int = 0
-    solvent: str = "water"  # used by sampling (ALPB), refinement and scoring
+    # Used by sampling (ALPB), refinement and scoring.  A run scored in the gas
+    # phase ([scoring] solvent_model = "none") uses no solvent anywhere.
+    solvent: str = "water"
 
     @property
     def charge_range(self) -> tuple[int, int]:
@@ -285,6 +287,10 @@ class SamplingConfig:
     max_tautomers: int = 1000
     max_transforms: int = 1000
     crest_mode: str = "default"  # conformer search mode
+    # Take the input SMILES as the only species: no tautomers, no charge-separated
+    # protomers, no other charge state (charge_min = charge_max = its charge).
+    # For reference data that fix the species, such as MNSol.
+    fixed_species: bool = False
     # Approach 2 (crest_first) options
     prescreen_mode: str = "quick"
     prescreen_ewin: float = 6.0
@@ -480,6 +486,7 @@ def load_config(path: Path) -> PkaConfig:
         max_tautomers=samp_raw.get("max_tautomers", 1000),
         max_transforms=samp_raw.get("max_transforms", 1000),
         crest_mode=samp_raw.get("crest_mode", "default"),
+        fixed_species=samp_raw.get("fixed_species", False),
         prescreen_mode=samp_raw.get("prescreen_mode", "quick"),
         prescreen_ewin=samp_raw.get("prescreen_ewin", 6.0),
         full_mode=samp_raw.get("full_mode", "default"),
@@ -489,6 +496,17 @@ def load_config(path: Path) -> PkaConfig:
             f"Unknown sampling approach: {sampling.approach!r} "
             f"(must be 'rdkit_first' or 'crest_first')"
         )
+    if sampling.fixed_species:
+        if sampling.approach != "rdkit_first":
+            raise ValueError(
+                "[sampling] fixed_species needs approach = 'rdkit_first': crest_first "
+                "finds its species with CREST and cannot be held to the input"
+            )
+        if molecule.charge_min != molecule.charge_max:
+            raise ValueError(
+                "[sampling] fixed_species runs the input's own charge state only: "
+                "set charge_min = charge_max to it"
+            )
 
     scoring = _build_scoring(score_raw, compute.driver)
     refinement = _build_refinement(ref_raw, compute.driver, scoring)
