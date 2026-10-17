@@ -239,6 +239,11 @@ class TestValidateInputSmiles:
         with pytest.raises(ValueError, match="could not parse"):
             validate_input_smiles("not_a_smiles((")
 
+    @pytest.mark.parametrize("smi", ["[H][H]", "[H-]"])
+    def test_rejects_no_heavy_atom(self, smi: str) -> None:
+        with pytest.raises(ValueError, match="no heavy atom"):
+            validate_input_smiles(smi)
+
     @pytest.mark.parametrize(
         "smi", ["NCCc1c[nH]cn1", "CC(=O)[O-]", "C[N+](=O)[O-]", "C[C@@H](N)C(=O)O"]
     )

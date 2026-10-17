@@ -88,6 +88,15 @@ def _dissociated(geom: Geometry) -> str | None:
     return None
 
 
+def _has_no_torsion(geom: Geometry) -> bool:
+    """An atom or a diatomic, whose minimum is its only conformer.
+
+    Both approaches skip the conformer search for these: CREST would spend a
+    metadynamics finding that out, and it stops on a single atom.
+    """
+    return geom.n_atoms < 3
+
+
 def _single_conformer(geom: Geometry, charge: int, solvent: str | None) -> list[Conformer]:
     """One conformer from one geometry, with its energies, as a stand-in ensemble."""
     total = single_point(geom, charge=charge, solvent=solvent)
@@ -359,6 +368,9 @@ def run_approach1(
                         f"skipping the conformer search"
                     )
                     conformers = _single_conformer(geom_opt, q, solvent)
+                elif _has_no_torsion(geom_opt):
+                    conformers = _single_conformer(geom_opt, q, solvent)
+                    log.info("    Fewer than three atoms: one conformer, no search")
                 else:
                     try:
                         conformers = conformer_search(
@@ -479,15 +491,18 @@ def _run_crest_pipeline_for_stereoisomer(
     geom_opt, _ = optimize(geom_3d, charge=ref_charge, solvent=solvent)
 
     # Quick conformer pre-screen
-    log.info(f"  Quick conformer pre-screen (mode={prescreen_mode})...")
-    prescreen_conformers = conformer_search(
-        geom_opt,
-        charge=ref_charge,
-        solvent=solvent,
-        ewin=prescreen_ewin,
-        mode=prescreen_mode,
-        threads=threads,
-    )
+    if _has_no_torsion(geom_opt):
+        prescreen_conformers = _single_conformer(geom_opt, ref_charge, solvent)
+    else:
+        log.info(f"  Quick conformer pre-screen (mode={prescreen_mode})...")
+        prescreen_conformers = conformer_search(
+            geom_opt,
+            charge=ref_charge,
+            solvent=solvent,
+            ewin=prescreen_ewin,
+            mode=prescreen_mode,
+            threads=threads,
+        )
     representatives = _filter_by_energy_window(prescreen_conformers, prescreen_ewin)
     log.info(
         f"    {len(representatives)} representative conformer(s) within {prescreen_ewin} kcal/mol"
@@ -559,23 +574,28 @@ def _run_crest_pipeline_for_stereoisomer(
             representative = geoms[0]
             log.info(f"    Conformer search for tautomer {fp[:8]} (ewin={ewin} kcal/mol)...")
             try:
-                try:
-                    conformers = conformer_search(
-                        representative,
-                        charge=q,
-                        solvent=solvent,
-                        ewin=ewin,
-                        mode=full_mode,
-                        threads=threads,
-                    )
-                    log.info(f"      Found {len(conformers)} conformer(s)")
-                except RuntimeError as e:
-                    log.warning(
-                        f"      Conformer search failed for tautomer {fp[:8]}, falling back "
-                        f"to single optimized geometry: {e}"
-                    )
+                if _has_no_torsion(representative):
                     geom_opt, _ = optimize(representative, charge=q, solvent=solvent)
                     conformers = _single_conformer(geom_opt, q, solvent)
+                    log.info("      Fewer than three atoms: one conformer, no search")
+                else:
+                    try:
+                        conformers = conformer_search(
+                            representative,
+                            charge=q,
+                            solvent=solvent,
+                            ewin=ewin,
+                            mode=full_mode,
+                            threads=threads,
+                        )
+                        log.info(f"      Found {len(conformers)} conformer(s)")
+                    except RuntimeError as e:
+                        log.warning(
+                            f"      Conformer search failed for tautomer {fp[:8]}, falling "
+                            f"back to single optimized geometry: {e}"
+                        )
+                        geom_opt, _ = optimize(representative, charge=q, solvent=solvent)
+                        conformers = _single_conformer(geom_opt, q, solvent)
                 microstates.append(
                     Microstate(
                         tautomer_id=fp,

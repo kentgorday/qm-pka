@@ -28,6 +28,7 @@ from tautomator.pyscf_runner import (
     _build_mf,
     _resolve_basis,
     _set_method,
+    frequencies,
     optimize,
     single_point,
 )
@@ -640,3 +641,19 @@ class TestDensityFittingIsOn:
 def _smallest_s(basis: str, elem: str) -> float:
     shells = gto.basis.load(basis, elem)
     return float(min(row[0] for shell in shells if shell[0] == 0 for row in shell[1:]))
+
+
+class TestAtom:
+    """An atom has no internal coordinates: geomeTRIC has nothing to optimize
+    and there is no vibration, so both return at once rather than failing."""
+
+    fluoride = Geometry(symbols=("F",), coords=np.zeros((1, 3)))
+
+    def test_optimize_returns_the_atom_and_its_energy(self) -> None:
+        geom, energy, converged = optimize(self.fluoride, -1, "pbe", "sto-3g", threads=1)
+        assert converged
+        assert geom is self.fluoride
+        assert energy == pytest.approx(single_point(self.fluoride, -1, "pbe", "sto-3g"))
+
+    def test_an_atom_has_no_frequencies(self) -> None:
+        assert frequencies(self.fluoride, -1, "pbe", "sto-3g") == []

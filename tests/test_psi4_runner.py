@@ -159,18 +159,19 @@ class TestFittingBasisBlock:
 
         def fake_run(input_text: str, work_dir: Path, **_kwargs: object) -> str:
             inputs.append(input_text)
-            (work_dir / "optimized.xyz").write_text("1\n\nCl 0.0 0.0 0.0\n")
+            (work_dir / "optimized.xyz").write_text("2\n\nCl 0.0 0.0 0.0\nH 0.0 0.0 1.27\n")
             (work_dir / "frequencies.dat").write_text("")
             return "=== FINAL ENERGY: -1.000000000000 ===\n=== CONVERGED: 1 ===\n"
 
         monkeypatch.setattr(psi4_runner, "_run_psi4", fake_run)
-        chloride = Geometry(symbols=("Cl",), coords=np.zeros((1, 3)))
-        psi4_runner.single_point(chloride, -1, "PBE0", "def2-SVP")
-        psi4_runner.optimize(chloride, -1, "PBE0", "def2-SVP")
-        psi4_runner.frequencies(chloride, -1, "PBE0", "def2-SVP")
+        # Two atoms: optimize and frequencies return at once for a single atom.
+        hcl = Geometry(symbols=("Cl", "H"), coords=np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.27]]))
+        psi4_runner.single_point(hcl, 0, "PBE0", "def2-SVP")
+        psi4_runner.optimize(hcl, 0, "PBE0", "def2-SVP")
+        psi4_runner.frequencies(hcl, 0, "PBE0", "def2-SVP")
         assert len(inputs) == 3
         for text in inputs:
-            assert _df_basis_block("def2-SVP", chloride) in text
+            assert _df_basis_block("def2-SVP", hcl) in text
 
 
 @pytest.fixture

@@ -51,6 +51,9 @@ def optimize(
     re-minimizing those needs ``vtight`` to move at all. Fresh embeddings are
     far enough from a minimum that ``tight`` does real work.
     """
+    if geom.n_atoms == 1:
+        # An atom has no internal coordinates, and xtb --opt stops on one.
+        return geom, True
     cleanup = False
     if work_dir is None:
         work_dir = Path(tempfile.mkdtemp(prefix="xtb_opt_"))
@@ -180,7 +183,12 @@ def frequencies(
 
     Returns frequencies in cm**-1 (the 3N-6 vibrational modes, with translation
     and rotation already projected out by xtb; imaginary modes as negatives).
+    An atom has none, but xtb does not know that: for a lone Cl- it writes its
+    three translations as 0.17 cm**-1 modes, which quasi-RRHO would turn into
+    -6.5 kcal/mol of vibrational free energy.  So an atom gets an empty list.
     """
+    if geom.n_atoms == 1:
+        return []
     cleanup = False
     if work_dir is None:
         work_dir = Path(tempfile.mkdtemp(prefix="xtb_hess_"))

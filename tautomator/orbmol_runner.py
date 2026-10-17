@@ -225,12 +225,16 @@ def optimize(
     converged); the geometry and energy are the last step's whether or not it
     converged.
     """
+    _refuse_solvent(solvent_model)
+    if geom.n_atoms == 1:
+        # An atom has no internal coordinates: its minimum is itself.
+        energy = single_point(geom, charge, method, basis, threads=threads, memory_gb=memory_gb)
+        return geom, energy, True
+
     import geometric.engine
     import geometric.molecule
     import geometric.optimize
     from geometric.errors import GeomOptNotConvergedError
-
-    _refuse_solvent(solvent_model)
 
     class _Engine(geometric.engine.Engine):  # type: ignore[misc]
         def __init__(self, start: Geometry) -> None:
@@ -293,12 +297,15 @@ def frequencies(
 
     The Hessian is a central difference of the model's analytic gradients (6N
     gradient calls).  The harmonic analysis is PySCF's -- the one the pyscf
-    driver uses -- so masses and projection match that driver exactly.
+    driver uses -- so masses and projection match that driver exactly.  An empty
+    list for an atom.
     """
+    _refuse_solvent(solvent_model)
+    if geom.n_atoms == 1:
+        return []
     from pyscf import gto
     from pyscf.hessian.thermo import harmonic_analysis
 
-    _refuse_solvent(solvent_model)
     n = geom.n_atoms
     x0 = np.asarray(geom.coords, dtype=float)
     hess = np.zeros((3 * n, 3 * n))

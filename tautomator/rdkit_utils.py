@@ -322,7 +322,7 @@ def deduplicate_protomers(smiles_list: list[str]) -> list[str]:
 def validate_input_smiles(smiles: str) -> None:
     """Raise ``ValueError`` if the input is outside what the pipeline models.
 
-    Two classes are rejected outright rather than approximated, because nothing
+    Three classes are rejected outright rather than approximated, because nothing
     downstream would treat them correctly and a plausible-looking number is
     worse than a refusal:
 
@@ -335,6 +335,11 @@ def validate_input_smiles(smiles: str) -> None:
     meaningless when fragments translate freely, and the thermodynamic cycle
     assumes a single solute. Desalt first and submit the component of interest.
     There are no plans to support them.
+
+    Species with no heavy atom (H2, H-). A microstate's identity is read off
+    its coordinates by assigning every hydrogen to its nearest heavy atom
+    (``tautomer_dedup.assign_protons``), and with no heavy atom there is
+    nothing to assign it to.
 
     Two further limits are *not* checked here, because RDKit discards them
     before this function ever sees them, and both may be supported later:
@@ -362,4 +367,10 @@ def validate_input_smiles(smiles: str) -> None:
             f"Multi-component input is not supported: {smiles} has {n_frags} "
             f"disconnected fragments. Desalt the structure and submit the "
             f"single component whose pKa is wanted."
+        )
+
+    if mol.GetNumHeavyAtoms() == 0:
+        raise ValueError(
+            f"Input with no heavy atom is not supported: {smiles}. Microstates are "
+            f"identified by which heavy atom each hydrogen sits on."
         )

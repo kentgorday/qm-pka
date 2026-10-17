@@ -621,6 +621,21 @@ def optimize(
     The geometry and energy are always the latest ones, regardless of
     convergence status.
     """
+    if geom.n_atoms == 1:
+        # An atom has no internal coordinates: its minimum is itself.
+        energy = single_point(
+            geom,
+            charge,
+            method,
+            basis,
+            solvent_model=solvent_model,
+            solvent=solvent,
+            pcm_hydrogen_radius=pcm_hydrogen_radius,
+            threads=threads,
+            memory_gb=memory_gb,
+        )
+        return geom, energy, True
+
     from pyscf.geomopt.geometric_solver import kernel as geom_kernel
 
     def _run(start_geom: Geometry, coordsys: str, maxsteps: int) -> tuple[Geometry, float, bool]:
@@ -689,8 +704,11 @@ def frequencies(
     finite-difference D4 Hessians.  The vibrational frequencies are
     insensitive to the choice of dispersion correction.
 
-    Returns frequencies in cm⁻¹ (including imaginary frequencies as negative values).
+    Returns frequencies in cm⁻¹ (including imaginary frequencies as negative values);
+    an empty list for an atom.
     """
+    if geom.n_atoms == 1:
+        return []
     method_lower = method.lower().replace("_", "-")
     hess_method = _HESSIAN_FALLBACK.get(method_lower, method)
     if hess_method != method:

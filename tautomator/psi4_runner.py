@@ -233,6 +233,20 @@ def optimize(
     geometry and energy are always the latest ones, even if optking did not
     fully converge.
     """
+    if geom.n_atoms == 1:
+        # An atom has no internal coordinates: its minimum is itself.
+        energy = single_point(
+            geom,
+            charge,
+            method,
+            basis,
+            solvent_model=solvent_model,
+            solvent=solvent,
+            pcm_hydrogen_radius=pcm_hydrogen_radius,
+            threads=threads,
+            memory_gb=memory_gb,
+        )
+        return geom, energy, True
     mol_block = _molecule_block(geom, charge)
     opts_block = _options_block(method, basis)
 
@@ -308,8 +322,10 @@ def frequencies(
     Returns frequencies in cm⁻¹ (imaginary frequencies as negative values).  In
     implicit solvent the Hessian is finite differences of analytical PCM
     gradients (psi4-swig-pcm takes Psi4's analytical SCF Hessians out of play,
-    since those would leave the PCM out).
+    since those would leave the PCM out).  An empty list for an atom.
     """
+    if geom.n_atoms == 1:
+        return []
     mol_block = _molecule_block(geom, charge)
     opts_block = _options_block(method, basis)
 

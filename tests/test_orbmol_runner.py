@@ -16,6 +16,8 @@ from tautomator.types import ChargeState, Conformer, Ensemble, Geometry, Microst
 HARTREE_TO_KCAL = 627.509474
 METHOD = "OrbMol-v2"
 
+CHLORIDE = Geometry(symbols=("Cl",), coords=np.zeros((1, 3)))
+
 WATER = Geometry(
     symbols=("O", "H", "H"),
     coords=np.array([[0.0, 0.0, 0.0], [0.0, 0.757, 0.586], [0.0, -0.757, 0.586]]),
@@ -39,9 +41,15 @@ class TestWithoutModel:
             orbmol_runner.single_point(WATER, 0, "wB97X-3c")
 
     @pytest.mark.parametrize("fn", ["single_point", "optimize", "frequencies"])
-    def test_solvent_model_refused(self, fn: str) -> None:
+    @pytest.mark.parametrize("geom", [WATER, CHLORIDE], ids=["water", "atom"])
+    def test_solvent_model_refused(self, fn: str, geom: Geometry) -> None:
+        # An atom too: optimize and frequencies return early for one, and must not
+        # hand back a gas-phase answer to a solvated request.
+        charge = -1 if geom is CHLORIDE else 0
         with pytest.raises(ValueError, match="gas-phase potential"):
-            getattr(orbmol_runner, fn)(WATER, 0, METHOD, solvent_model="IEFPCM", solvent="water")
+            getattr(orbmol_runner, fn)(
+                geom, charge, METHOD, solvent_model="IEFPCM", solvent="water"
+            )
 
     def test_checksum_mismatch_raises(self, tmp_path: Path) -> None:
         bogus = tmp_path / "weights.ckpt"

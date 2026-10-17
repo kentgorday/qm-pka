@@ -187,3 +187,51 @@ def test_a_dissociated_geometry_skips_the_conformer_search(
         c for cs in ensemble.charge_states.values() for ms in cs.microstates for c in ms.conformers
     ]
     assert len(kept) == 1, "one stand-in conformer, for the repair pass to exclude"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("smiles", "charge", "has_vibration"), [("[Cl-]", -1, False), ("[OH-]", -1, True)]
+)
+def test_atoms_and_diatomics_get_one_conformer_without_a_search(
+    monkeypatch: pytest.MonkeyPatch, smiles: str, charge: int, has_vibration: bool
+) -> None:
+    """With no torsion there is nothing to search, and CREST and xtb's optimizer
+    stop on a single atom: a halide used to leave its charge state with no
+    microstate at all.  An atom also has no vibrations, though xtb's Hessian
+    reports its translations as three near-zero modes, worth -6.5 kcal/mol to
+    quasi-RRHO if they were let through."""
+
+    def forbidden(*args: object, **kwargs: object) -> object:
+        raise AssertionError("conformer_search must not run on fewer than three atoms")
+
+    monkeypatch.setattr(sampling, "conformer_search", forbidden)
+
+    ensemble = sampling.run_approach1(smiles, charge_range=(charge, charge), solvent="water")
+
+    (ms,) = ensemble.charge_states[charge].microstates
+    (conf,) = ms.conformers
+    assert conf.solvation_energy is not None and conf.solvation_energy < 0
+    assert conf.rrho_correction is not None
+    # An atom's vibrational free energy is exactly zero; OH- has its stretch.
+    if has_vibration:
+        assert conf.rrho_correction > 0
+    else:
+        assert conf.rrho_correction == 0.0
+
+
+@pytest.mark.slow
+def test_crest_first_takes_a_single_atom_without_a_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Approach 2's pre-screen called CREST unguarded, and CREST exits 1 on a lone
+    atom, so the error escaped `run_approach2`."""
+
+    def forbidden(*args: object, **kwargs: object) -> object:
+        raise AssertionError("conformer_search must not run on fewer than three atoms")
+
+    monkeypatch.setattr(sampling, "conformer_search", forbidden)
+
+    ensemble = sampling.run_approach2("[Ne]", charge_range=(0, 0), solvent="water")
+
+    (ms,) = ensemble.charge_states[0].microstates
+    (conf,) = ms.conformers
+    assert conf.rrho_correction == 0.0
