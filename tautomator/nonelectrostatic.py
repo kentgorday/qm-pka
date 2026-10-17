@@ -32,17 +32,25 @@ used here.  Nothing is fitted yet.
 
 The inputs (`Solute`) are backend-neutral; `pyscf_nonelectrostatic` fills one
 from a converged PySCF mean field.  All quantities are in atomic units.
+Scoring can keep each conformer's descriptors with its energies
+(`save_descriptors`), which is what a fit that reweights the conformers needs.
 """
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 from numpy.typing import NDArray
 
+from tautomator.types import Geometry
+
 Array = NDArray[np.float64]
+IntArray = NDArray[np.intp]
 
 # Damping length of the dispersion kernel (bohr); CMIRS's fixed value.
 DELTA = 7.0
@@ -89,6 +97,7 @@ class Surface:
     charges: Array  # (n_elements,), apparent surface charge q_i in e
     atom_coords: Array  # (n_atoms, 3), bohr
     atom_radii: Array  # (n_atoms,), bohr
+    element_atoms: IntArray  # (n_elements,), the atom whose sphere each element is on
     eps: float  # dielectric constant the charges were solved with
     charge_scale: float  # the model's charges relative to a conductor's
 
@@ -99,8 +108,11 @@ class Surface:
                 f"coords and normals must have shape ({n}, 3), "
                 f"got {self.coords.shape} and {self.normals.shape}"
             )
-        if self.charges.shape != (n,):
-            raise ValueError(f"charges must have shape ({n},), got {self.charges.shape}")
+        if self.charges.shape != (n,) or self.element_atoms.shape != (n,):
+            raise ValueError(
+                f"charges and element_atoms must have shape ({n},), "
+                f"got {self.charges.shape} and {self.element_atoms.shape}"
+            )
         if self.atom_coords.shape != (len(self.atom_radii), 3):
             raise ValueError(
                 f"atom_coords must have shape ({len(self.atom_radii)}, 3), "
@@ -291,6 +303,7 @@ class Descriptors:
     normal_field: Array  # solute's normal field at each element
     charge_field: Array  # the same from the apparent surface charges
     electrons_outside: float
+    element_atoms: IntArray  # the atom whose sphere each element is on
 
     def field(self, source: FieldSource = "field") -> Array:
         return self.normal_field if source == "field" else self.charge_field
@@ -331,4 +344,137 @@ def descriptors(
         normal_field=solute.normal_field,
         charge_field=charge_field(solute.surface),
         electrons_outside=electrons_outside(solute.exterior),
+        element_atoms=solute.surface.element_atoms,
     )
+
+
+# ---------------------------------------------------------------------------
+# Saved descriptors
+# ---------------------------------------------------------------------------
+
+# What scoring writes into a run's output directory when [scoring]
+# nonelectrostatic_descriptors is on.
+DESCRIPTOR_FILE = "nonelectrostatic.npz"
+_FILE_VERSION = 1
+
+
+@dataclass(frozen=True)
+class ScoredConformer:
+    """A conformer scored in solution: its energies as scoring left them, and its descriptors.
+
+    A fit adds `Descriptors.energy` to ``free_energy`` and reweights, the
+    conformer standing for ``states`` states as in `ensemble.assign_weights`.
+    """
+
+    charge: int
+    microstate: str  # Microstate.tautomer_id
+    includes_enantiomer: bool  # Microstate.includes_enantiomer
+    geometry: Geometry
+    electronic_energy: float  # gas phase, at the scoring level (hartree)
+    solvation_energy: float  # E(PCM) - E(gas), electrostatics only (hartree)
+    rrho_correction: float | None  # hartree
+    multiplicity: float  # Conformer.multiplicity
+    descriptors: Descriptors
+
+    @property
+    def free_energy(self) -> float:
+        """The conformer's free energy without the correction (hartree)."""
+        return self.electronic_energy + self.solvation_energy + (self.rrho_correction or 0.0)
+
+    @property
+    def states(self) -> float:
+        """How many physical states this conformer contributes."""
+        return (2.0 if self.includes_enantiomer else 1.0) * self.multiplicity
+
+
+def save_descriptors(
+    path: Path, conformers: Sequence[ScoredConformer], settings: dict[str, Any]
+) -> None:
+    """Write scored conformers to one .npz file, for `load_descriptors`.
+
+    The per-atom and per-element arrays of all conformers are concatenated,
+    with each conformer's counts alongside, so the file holds plain arrays and
+    loads without pickle.  ``settings`` (anything JSON can hold) records how the
+    descriptors were computed.  The file is replaced in one step, so a reader
+    finds the old file or the complete new one.
+    """
+
+    def joined(parts: list[NDArray[Any]], tail: tuple[int, ...], dtype: Any) -> NDArray[Any]:
+        return np.concatenate(parts) if parts else np.empty((0, *tail), dtype=dtype)
+
+    d = [c.descriptors for c in conformers]
+    rrho = [np.nan if c.rrho_correction is None else c.rrho_correction for c in conformers]
+    arrays: dict[str, Any] = {
+        "settings": np.array(json.dumps({"version": _FILE_VERSION, **settings})),
+        "charge": np.array([c.charge for c in conformers], dtype=np.int64),
+        "microstate": np.array([c.microstate for c in conformers], dtype=str),
+        "includes_enantiomer": np.array([c.includes_enantiomer for c in conformers], dtype=bool),
+        "electronic_energy": np.array([c.electronic_energy for c in conformers], dtype=float),
+        "solvation_energy": np.array([c.solvation_energy for c in conformers], dtype=float),
+        "rrho_correction": np.array(rrho, dtype=float),
+        "multiplicity": np.array([c.multiplicity for c in conformers], dtype=float),
+        "dispersion": np.array([x.dispersion for x in d], dtype=float),
+        "exchange": np.array([x.exchange for x in d], dtype=float),
+        "electrons_outside": np.array([x.electrons_outside for x in d], dtype=float),
+        "n_atoms": np.array([c.geometry.n_atoms for c in conformers], dtype=np.int64),
+        "symbols": np.array([s for c in conformers for s in c.geometry.symbols], dtype=str),
+        "coords": joined([c.geometry.coords for c in conformers], (3,), float),
+        "n_elements": np.array([len(x.areas) for x in d], dtype=np.int64),
+        "areas": joined([x.areas for x in d], (), float),
+        "normal_field": joined([x.normal_field for x in d], (), float),
+        "charge_field": joined([x.charge_field for x in d], (), float),
+        "element_atoms": joined([x.element_atoms for x in d], (), np.intp),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".partial")
+    with partial.open("wb") as f:
+        np.savez(f, **arrays)
+    partial.replace(path)
+
+
+def load_descriptors(path: Path) -> tuple[list[ScoredConformer], dict[str, Any]]:
+    """Read a file `save_descriptors` wrote: (conformers, settings)."""
+    with np.load(path, allow_pickle=False) as f:
+        settings: dict[str, Any] = json.loads(str(f["settings"]))
+        if settings.get("version") != _FILE_VERSION:
+            raise ValueError(
+                f"{path} is version {settings.get('version')}; this build reads {_FILE_VERSION}"
+            )
+        a = {key: f[key] for key in f.files}
+    n = len(a["charge"])
+    if n == 0:
+        return [], settings
+
+    def split(key: str, counts: str) -> list[NDArray[Any]]:
+        return np.split(a[key], np.cumsum(a[counts])[:-1])
+
+    symbols, coords = split("symbols", "n_atoms"), split("coords", "n_atoms")
+    areas, normal, from_charges, atoms = (
+        split(key, "n_elements")
+        for key in ("areas", "normal_field", "charge_field", "element_atoms")
+    )
+    conformers = [
+        ScoredConformer(
+            charge=int(a["charge"][i]),
+            microstate=str(a["microstate"][i]),
+            includes_enantiomer=bool(a["includes_enantiomer"][i]),
+            geometry=Geometry(tuple(str(s) for s in symbols[i]), coords[i]),
+            electronic_energy=float(a["electronic_energy"][i]),
+            solvation_energy=float(a["solvation_energy"][i]),
+            rrho_correction=(
+                None if np.isnan(a["rrho_correction"][i]) else float(a["rrho_correction"][i])
+            ),
+            multiplicity=float(a["multiplicity"][i]),
+            descriptors=Descriptors(
+                dispersion=float(a["dispersion"][i]),
+                exchange=float(a["exchange"][i]),
+                areas=areas[i],
+                normal_field=normal[i],
+                charge_field=from_charges[i],
+                electrons_outside=float(a["electrons_outside"][i]),
+                element_atoms=atoms[i],
+            ),
+        )
+        for i in range(n)
+    ]
+    return conformers, settings

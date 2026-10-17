@@ -8,10 +8,13 @@ refinement (scoring never recomputes frequencies).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import ModuleType
 
-from tautomator.config import DEFAULT_MEMORY_GB
+from tautomator.cavity_quadrature import LEBEDEV_ORDER, N_RADIAL
+from tautomator.config import DEFAULT_MEMORY_GB, solvent_dielectric, solvent_electron_density
 from tautomator.ensemble import filter_charge_state_by_energy
+from tautomator.nonelectrostatic import DELTA, VV_C, ScoredConformer, save_descriptors
 from tautomator.types import Ensemble, ExcludedConformer
 
 log = logging.getLogger(__name__)
@@ -44,6 +47,7 @@ def score(
     pcm_hydrogen_radius: float = 1.1,
     threads: int = 1,
     memory_gb: float = DEFAULT_MEMORY_GB,
+    descriptors_path: Path | None = None,
 ) -> Ensemble:
     """Score all conformers via high-level DFT single-point energy.
 
@@ -60,9 +64,23 @@ def score(
     Conformers that fail are dropped with a warning. After processing,
     conformers within each charge state are filtered by the energy window.
 
+    With ``descriptors_path`` (PySCF and a PCM model only), the solvated single
+    point also yields the nonelectrostatic descriptors, and every conformer
+    scored there is saved with its energies (`nonelectrostatic.save_descriptors`),
+    those the energy window then drops included: the correction reweights the
+    conformers, and can bring one from outside the window into it.
+
     Modifies the ensemble in-place and returns it.
     """
     driver = _get_driver(driver_name)
+    if descriptors_path is not None:
+        if driver_name != "pyscf" or solvent_model is None or solvent is None:
+            raise ValueError(
+                "The nonelectrostatic descriptors come from a solvated PySCF single "
+                f"point; got driver {driver_name!r}, solvent model {solvent_model!r}"
+            )
+        from tautomator import pyscf_nonelectrostatic
+    scored: list[ScoredConformer] = []
 
     for cs in ensemble.charge_states.values():
         log.info(f"Scoring charge state q={cs.charge}...")
@@ -71,17 +89,31 @@ def score(
             for conf in ms.conformers:
                 try:
                     if solvent_model is not None:
-                        total = driver.single_point(
-                            conf.geometry,
-                            cs.charge,
-                            method,
-                            basis,
-                            solvent_model,
-                            solvent,
-                            pcm_hydrogen_radius=pcm_hydrogen_radius,
-                            threads=threads,
-                            memory_gb=memory_gb,
-                        )
+                        if descriptors_path is None:
+                            total = driver.single_point(
+                                conf.geometry,
+                                cs.charge,
+                                method,
+                                basis,
+                                solvent_model,
+                                solvent,
+                                pcm_hydrogen_radius=pcm_hydrogen_radius,
+                                threads=threads,
+                                memory_gb=memory_gb,
+                            )
+                        else:
+                            assert solvent is not None  # checked above
+                            total, desc = pyscf_nonelectrostatic.single_point_with_descriptors(
+                                conf.geometry,
+                                cs.charge,
+                                method,
+                                basis,
+                                solvent_model,
+                                solvent,
+                                pcm_hydrogen_radius=pcm_hydrogen_radius,
+                                threads=threads,
+                                memory_gb=memory_gb,
+                            )
                         gas = driver.single_point(
                             conf.geometry,
                             cs.charge,
@@ -92,6 +124,20 @@ def score(
                         )
                         conf.electronic_energy = gas
                         conf.solvation_energy = total - gas
+                        if descriptors_path is not None:
+                            scored.append(
+                                ScoredConformer(
+                                    charge=cs.charge,
+                                    microstate=ms.tautomer_id,
+                                    includes_enantiomer=ms.includes_enantiomer,
+                                    geometry=conf.geometry,
+                                    electronic_energy=gas,
+                                    solvation_energy=total - gas,
+                                    rrho_correction=conf.rrho_correction,
+                                    multiplicity=conf.multiplicity,
+                                    descriptors=desc,
+                                )
+                            )
                     else:
                         conf.electronic_energy = driver.single_point(
                             conf.geometry,
@@ -135,5 +181,26 @@ def score(
             f"  q={cs.charge}: {len(cs.microstates)} microstate(s), "
             f"{n_conf} conformer(s) after filtering"
         )
+
+    if descriptors_path is not None:
+        assert solvent is not None
+        save_descriptors(
+            descriptors_path,
+            scored,
+            {
+                "method": method,
+                "basis": basis,
+                "solvent_model": solvent_model,
+                "solvent": solvent,
+                "eps": solvent_dielectric(solvent),
+                "pcm_hydrogen_radius": pcm_hydrogen_radius,
+                "solvent_rho": solvent_electron_density(solvent),
+                "delta": DELTA,
+                "vv_c": VV_C,
+                "lebedev_order": LEBEDEV_ORDER,
+                "n_radial": N_RADIAL,
+            },
+        )
+        log.info(f"  Saved descriptors of {len(scored)} conformer(s) to {descriptors_path}")
 
     return ensemble

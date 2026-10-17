@@ -9,6 +9,7 @@ import pytest
 from tautomator import xtb_runner
 from tautomator.config import (
     SOLVENT_DIELECTRIC,
+    PkaConfig,
     _has_diffuse,
     alpb_name,
     load_config,
@@ -1043,3 +1044,43 @@ class TestFixedSpecies:
                 fixed_species = true
             """)
             )
+
+
+class TestNonelectrostaticDescriptors:
+    def _load(
+        self, tmp_toml: Callable[[str], Path], scoring: str, driver: str = "pyscf"
+    ) -> PkaConfig:
+        return load_config(
+            tmp_toml(f"""
+                protocol = "high_quality"
+                [molecule]
+                smiles = "CCO"
+                [scoring]
+                {scoring}
+                [compute]
+                driver = "{driver}"
+            """)
+        )
+
+    def test_off_by_default(self, tmp_toml: Callable[[str], Path]) -> None:
+        assert not self._load(tmp_toml, "").scoring.nonelectrostatic_descriptors
+
+    @pytest.mark.parametrize("model", ["IEF-PCM", "CPCM", "COSMO"])
+    def test_on_with_a_pcm_model(self, tmp_toml: Callable[[str], Path], model: str) -> None:
+        config = self._load(
+            tmp_toml, f'nonelectrostatic_descriptors = true\nsolvent_model = "{model}"'
+        )
+        assert config.scoring.nonelectrostatic_descriptors
+
+    def test_needs_pyscf(self, tmp_toml: Callable[[str], Path]) -> None:
+        with pytest.raises(ValueError, match="driver = 'pyscf'"):
+            self._load(tmp_toml, "nonelectrostatic_descriptors = true", driver="psi4")
+
+    @pytest.mark.parametrize(
+        ("model", "given"), [("none", "gas-phase scoring"), ("SMD", "solvent_model = 'SMD'")]
+    )
+    def test_needs_an_analytical_pcm(
+        self, tmp_toml: Callable[[str], Path], model: str, given: str
+    ) -> None:
+        with pytest.raises(ValueError, match=f"analytical PCM .* not {given}"):
+            self._load(tmp_toml, f'nonelectrostatic_descriptors = true\nsolvent_model = "{model}"')

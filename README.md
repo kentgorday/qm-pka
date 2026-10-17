@@ -230,6 +230,11 @@ its own charge. It is for reference data that fix the species, such as MNSol,
 where adding forms the measurement did not see would change the answer; it
 needs `approach = "rdkit_first"`.
 
+`[scoring] nonelectrostatic_descriptors = true` also saves each solvated
+conformer's nonelectrostatic descriptors, with its energies, to
+`<output_dir>/nonelectrostatic.npz`, for fitting the correction (PySCF and an
+analytical PCM model; see [docs/nonelectrostatic.md](docs/nonelectrostatic.md)).
+
 | | `high_quality` | `fast` |
 |---|---|---|
 | sampling `ewin` | 10 | 15 |
@@ -363,7 +368,8 @@ Scripts (`scripts/`):
   for the IUPAC data: both are distributed under their own licenses.
 - `run_mnsol_set.py` — runs that set: each solute in every medium its
   reference values need (water, `woctanol`, hexadecane, gas phase), one fixed
-  species at its own charge, with per-run failure isolation and resume.
+  species at its own charge, with per-run failure isolation and resume. Each
+  solvent run saves its conformers' nonelectrostatic descriptors.
 - `approach1_rdkit_first.py`, `approach2_crest_first.py` — sampling-only
   entry points (no DFT).
 
@@ -587,7 +593,7 @@ What's implemented:
 - Batch runner with per-molecule failure isolation and resume.
 - Training-set selection from IUPAC dissociation constants.
 - The nonelectrostatic correction's integrals (unfitted, energy only, PySCF
-  only) and the MNSol fitting-set selection.
+  only), saved per conformer at scoring, and the MNSol fitting-set selection.
 
 What's not yet here:
 

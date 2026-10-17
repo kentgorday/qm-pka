@@ -326,6 +326,9 @@ class ScoringConfig:
     solvent_model: str | None = None  # the run's implicit-solvent model
     ewin: float = 10.0
     pcm_hydrogen_radius: float = 1.1  # PCM cavity radius (Angstrom) for hydrogen
+    # Save every solvated conformer's nonelectrostatic descriptors with its
+    # energies (<output_dir>/nonelectrostatic.npz), for fitting the correction.
+    nonelectrostatic_descriptors: bool = False
 
 
 @dataclass
@@ -534,6 +537,7 @@ def _build_scoring(raw: dict[str, Any], driver: str) -> ScoringConfig:
         solvent_model=model,
         ewin=raw.get("ewin", 10.0),
         pcm_hydrogen_radius=raw.get("pcm_hydrogen_radius", 1.1),
+        nonelectrostatic_descriptors=raw.get("nonelectrostatic_descriptors", False),
     )
 
 
@@ -635,6 +639,21 @@ def _validate(ref: RefinementConfig, scoring: ScoringConfig, compute: ComputeCon
             raise ValueError(
                 f"[scoring] solvent_model = {scoring.solvent_model!r} is not available "
                 f"on the {compute.driver} driver (has: {', '.join(sorted(allowed))})."
+            )
+
+    if scoring.nonelectrostatic_descriptors:
+        if compute.driver != "pyscf":
+            raise ValueError(
+                "[scoring] nonelectrostatic_descriptors needs [compute] driver = 'pyscf': "
+                "the descriptors are read off the PySCF mean field of the solvated "
+                "single point."
+            )
+        model = scoring.solvent_model
+        if model is None or model.upper().replace("-", "") not in PCM_METHODS:
+            given = "gas-phase scoring" if model is None else f"solvent_model = {model!r}"
+            raise ValueError(
+                "[scoring] nonelectrostatic_descriptors needs an analytical PCM solvent "
+                f"model (IEF-PCM, C-PCM or COSMO), not {given}"
             )
 
     _validate_prefilter(ref)

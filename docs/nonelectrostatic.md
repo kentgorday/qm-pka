@@ -9,11 +9,14 @@ built the way it is, and what is still missing. Nothing is fitted yet.
 The code is in three modules:
 
 - `tautomator/nonelectrostatic.py`: the integrals, their inputs (`Solute`),
-  the parameters (`Params`) and the parameter-free `Descriptors` a fit keeps.
+  the parameters (`Params`), the parameter-free `Descriptors` a fit keeps, and
+  the file scoring saves them to (`save_descriptors`, `load_descriptors`).
 - `tautomator/cavity_quadrature.py`: grids for the inside and the outside of
   the cavity.
 - `tautomator/pyscf_nonelectrostatic.py`: `solute_from_mf`, which reads the
-  inputs off a converged PySCF PCM mean field.
+  inputs off a converged PySCF PCM mean field, and
+  `single_point_with_descriptors`, the PCM single point scoring runs when it
+  saves them.
 
 ---
 
@@ -176,14 +179,42 @@ solute's final ΔG, and recompute the Boltzmann weights for every trial
 parameter set: `G_soln(θ) = −kT ln Σ_j g_j exp(−β (G_j⁰ + ΔG_j(θ)))`. The
 correction is applied after the SCF, so this costs no quantum chemistry.
 
+### Saved descriptors
+
+With `[scoring] nonelectrostatic_descriptors = true` (PySCF, with IEF-PCM, C-PCM
+or COSMO), scoring reads the descriptors off each conformer's solvated single
+point and writes `<output_dir>/nonelectrostatic.npz`; `run_mnsol_set.py` turns
+it on for every solvent run. The file holds every conformer scored in solution,
+the ones scoring's energy window then drops included, since the correction can
+bring one of them back into the window. The ensemble.json beside it has only
+those the window kept.
+
+```python
+from tautomator.nonelectrostatic import load_descriptors
+
+conformers, settings = load_descriptors(run_dir / "nonelectrostatic.npz")
+c = conformers[0]
+c.free_energy                  # E_gas + ΔG_PCM + G_RRHO (hartree), no correction
+c.states                       # g_j: multiplicity, times 2 for a collapsed enantiomer pair
+c.descriptors.energy(params)   # ΔG_j(θ)
+settings["solvent_rho"], settings["delta"]   # what the dispersion integral used
+```
+
+Each conformer has its geometry, its microstate and charge, its energy
+components, the three integrals, and per surface element the area, both
+normal fields and the atom whose sphere the element is on. That is about
+50 kB per conformer, and on the order of 150 MB for the MNSol set. The
+dispersion integral is stored at one damping length (`delta`, CMIRS's 7 bohr)
+and one solvent density; changing either would mean rerunning the SCF.
+Computing the descriptors adds about a quarter to scoring.
+
 ---
 
 ## Not done yet
 
-- **The pipeline does not compute the descriptors.** Scoring returns energies;
-  `solute_from_mf` has to see the scoring SCF's mean field before it is
-  discarded. Conformers outside the refinement and scoring windows should get
-  descriptors too, since the correction can reorder them.
+- **Conformers outside the refinement window** have no scoring-level energy, so
+  they have no descriptors either; refinement's 8 kcal/mol window decides
+  which conformers the fit can reweight.
 - **Psi4.** psi4_runner runs Psi4 as a separate program, so the descriptors would
   have to be evaluated inside its input deck from psi4-swig-pcm's cavity and
   charges.

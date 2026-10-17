@@ -13,6 +13,7 @@ from tautomator.ensemble import (
     schema_version,
     serialize_ensemble,
 )
+from tautomator.nonelectrostatic import DESCRIPTOR_FILE
 from tautomator.refinement import refine
 from tautomator.sampling import run_approach1, run_approach2
 from tautomator.scoring import score
@@ -177,6 +178,7 @@ def run_pipeline(config: PkaConfig, resume: bool = False) -> Ensemble:
         pcm_hydrogen_radius=sc.pcm_hydrogen_radius,
         threads=threads,
         memory_gb=memory_gb,
+        descriptors_path=output_dir / DESCRIPTOR_FILE if sc.nonelectrostatic_descriptors else None,
     )
     ensemble.settings["scoring"] = provenance["scoring"]
 

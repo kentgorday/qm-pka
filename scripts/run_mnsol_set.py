@@ -17,11 +17,19 @@ solute runs in:
 The logP-only solutes need no gas run: logP is G(woctanol) - G(water).
 
 Output goes to <output-root>/<medium>/<solute>/, each a normal pipeline output
-directory (sampling/, refinement/, ensemble.json, config.toml).  Solutes run in
-CSV order, all of one solute's media before the next solute, so a partial run
-leaves complete solvation free energies behind.  Failures are caught per run
-and written to ERROR.txt in its directory; --resume skips finished runs and
-picks up unfinished ones at their last completed stage.
+directory (sampling/, refinement/, ensemble.json, config.toml).  A solvent run
+also saves every conformer it scored, with its energies and nonelectrostatic
+descriptors, to nonelectrostatic.npz ([scoring] nonelectrostatic_descriptors;
+read it with nonelectrostatic.load_descriptors): the fit reweights the
+conformers from there without any quantum chemistry.  About 50 kB per scored
+conformer, and a quarter on top of the scoring time.
+
+Solutes run in CSV order, all of one solute's media before the next solute, so
+a partial run leaves complete solvation free energies behind.  Failures are
+caught per run and written to ERROR.txt in its directory; --resume skips
+finished runs and picks up unfinished ones at their last completed stage.  A
+solvent run finished without its descriptors file counts as unfinished, and
+reruns scoring.
 
 PySCF is the default driver here.  At high_quality on an M-series Mac (8
 threads, sampling reused) the two drivers refined in the same time, but Psi4
@@ -31,7 +39,8 @@ scored at def2-QZVPPD 1.2-1.4x slower: toluene in water 215 s against PySCF's
 helps PySCF more: FastPCM keeps its surface integrals in core only when they fit
 in half of it, which at 12 GB holds for about 87% of the set (toluene's PCM
 single point: 107 s at 4 GB, 61 s at 8).  And the nonelectrostatic descriptors
-can only be read off a PySCF mean field (pyscf_nonelectrostatic).  Run one job
+can only be read off a PySCF mean field (pyscf_nonelectrostatic), so a Psi4 run
+needs --no-descriptors.  Run one job
 at a time on a 24 GB machine: toluene's scoring job peaked at 10.5 GB, and at
 --memory 12 the largest solutes add up to 6 GB of surface integrals to that
 (an estimate, not measured).
@@ -55,6 +64,7 @@ import traceback
 from pathlib import Path
 
 from tautomator.config import DEFAULT_MEMORY_GB, PROTOCOLS, load_config
+from tautomator.nonelectrostatic import DESCRIPTOR_FILE
 from tautomator.pipeline import run_pipeline
 from tautomator.training_set import compound_dir_name
 
@@ -81,16 +91,23 @@ def make_toml(
     threads: int,
     memory_gb: float,
     protocol: str,
+    descriptors: bool,
 ) -> str:
     """The config for one solute in one medium.
 
     The protocol sets every level of theory and window; a gas-phase run only
     switches scoring to the gas phase, which takes refinement, sampling and the
-    RRHO there with it.  Its [molecule] solvent is unused.
+    RRHO there with it.  Its [molecule] solvent is unused, and it has no
+    descriptors: there is no cavity in the gas phase.
     """
     safe_smiles = smiles.replace('"', '\\"')
     gas = medium == "gas"
-    scoring = '[scoring]\nsolvent_model = "none"\n\n' if gas else ""
+    if gas:
+        scoring = '[scoring]\nsolvent_model = "none"\n\n'
+    elif descriptors:
+        scoring = "[scoring]\nnonelectrostatic_descriptors = true\n\n"
+    else:
+        scoring = ""
     return f'''\
 protocol = "{protocol}"
 
@@ -135,6 +152,12 @@ def main() -> None:
             "keeps its surface integrals in core only when they fit in half of it."
         ),
     )
+    parser.add_argument(
+        "--no-descriptors",
+        dest="descriptors",
+        action="store_false",
+        help="do not save the nonelectrostatic descriptors (needed with --driver psi4)",
+    )
     parser.add_argument("--limit", type=int, default=None, help="only the first N solutes")
     parser.add_argument(
         "--only", nargs="+", default=None, metavar="ID", help="only these unique_IDs"
@@ -153,6 +176,13 @@ def main() -> None:
     )
     log = logging.getLogger(__name__)
 
+    if args.descriptors and args.driver != "pyscf":
+        print(
+            "Error: the nonelectrostatic descriptors need --driver pyscf; "
+            "pass --no-descriptors to run without them.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if not args.mnsol_set.exists():
         print(
             f"Error: {args.mnsol_set} not found. Run scripts/select_mnsol_set.py first.",
@@ -185,7 +215,11 @@ def main() -> None:
         uid, smiles, charge = row["unique_ID"], row["SMILES"], int(row["charge"])
         run_dir = args.output_root / medium / compound_dir_name(uid)
         label = f"[{i}/{len(runs)}] {uid} ({smiles}) in {medium}"
-        if args.resume and (run_dir / "ensemble.json").exists():
+        descriptors = args.descriptors and medium != "gas"
+        finished = (run_dir / "ensemble.json").exists() and (
+            not descriptors or (run_dir / DESCRIPTOR_FILE).exists()
+        )
+        if args.resume and finished:
             log.info(f"{label}: already done, skipping")
             n_skip += 1
             continue
@@ -203,6 +237,7 @@ def main() -> None:
                 args.threads,
                 args.memory,
                 args.protocol,
+                descriptors,
             )
             (run_dir / "config.toml").write_text(toml)
             run_pipeline(load_config(run_dir / "config.toml"), resume=args.resume)

@@ -10,21 +10,24 @@ import pytest
 from tautomator import nonelectrostatic
 from tautomator.config import solvent_electron_density
 from tautomator.nonelectrostatic import Array, Solute
-from tautomator.pyscf_nonelectrostatic import electric_field, solute_from_mf
-from tautomator.pyscf_runner import _build_mf
+from tautomator.pyscf_nonelectrostatic import (
+    electric_field,
+    single_point_with_descriptors,
+    solute_from_mf,
+)
+from tautomator.pyscf_runner import _build_mf, single_point
 from tautomator.types import Geometry
+
+FORMATE = Geometry(
+    symbols=("C", "O", "O", "H"),
+    coords=np.array([[0.0, 0.0, 0.52], [1.13, 0.0, -0.05], [-1.13, 0.0, -0.05], [0.0, 0.0, 1.66]]),
+)
 
 
 @pytest.fixture(scope="module")
 def formate() -> tuple[Any, Solute]:
     """HF/6-31G* formate anion in IEF-PCM water, built as the pipeline builds it."""
-    geom = Geometry(
-        symbols=("C", "O", "O", "H"),
-        coords=np.array(
-            [[0.0, 0.0, 0.52], [1.13, 0.0, -0.05], [-1.13, 0.0, -0.05], [0.0, 0.0, 1.66]]
-        ),
-    )
-    _mol, mf = _build_mf(geom, -1, "hf", "6-31g*", "IEFPCM", "water")
+    _mol, mf = _build_mf(FORMATE, -1, "hf", "6-31g*", "IEFPCM", "water")
     mf.verbose = 0
     mf.kernel()
     return mf, solute_from_mf(mf)
@@ -72,6 +75,23 @@ class TestSoluteFromMf:
         s = solute.surface
         dist = np.linalg.norm(s.coords[:, None, :] - s.atom_coords[None, :, :], axis=2)
         assert np.abs(dist - s.atom_radii[None, :]).min(axis=1) == pytest.approx(0.0, abs=1e-10)
+
+    def test_each_element_is_assigned_its_own_sphere(self, formate: tuple[Any, Solute]) -> None:
+        _mf, solute = formate
+        s = solute.surface
+        own = np.linalg.norm(s.coords - s.atom_coords[s.element_atoms], axis=1)
+        assert own == pytest.approx(s.atom_radii[s.element_atoms], abs=1e-10)
+        assert set(s.element_atoms) == set(range(len(s.atom_radii)))
+
+    def test_charges_are_those_of_the_converged_density(self, formate: tuple[Any, Solute]) -> None:
+        """The charges are recomputed from the final density, not taken from whatever
+        density the SCF evaluated last."""
+        mf, solute = formate
+        ws = mf.with_solvent
+        ws._intermediates["q"] = np.zeros_like(ws._intermediates["q"])
+        assert solute_from_mf(mf).surface.charges == pytest.approx(
+            solute.surface.charges, rel=1e-10, abs=1e-14
+        )
 
     def test_gauss_law_ties_field_normals_areas_and_density_together(
         self, formate: tuple[Any, Solute]
@@ -128,3 +148,17 @@ class TestSoluteFromMf:
             field = nonelectrostatic.charge_field(surface)
             mean_field[model] = surface.areas @ field / surface.areas.sum()
         assert mean_field["COSMO"] == pytest.approx(mean_field["IEFPCM"], rel=2e-3)
+
+
+class TestSinglePointWithDescriptors:
+    def test_energy_is_that_of_the_plain_single_point(self) -> None:
+        args = (FORMATE, -1, "hf", "6-31g*", "IEFPCM", "water")
+        energy, d = single_point_with_descriptors(*args)
+        assert energy == pytest.approx(single_point(*args), abs=1e-9)
+        assert d.dispersion > 0.0
+        assert len(d.areas) == len(d.normal_field) == len(d.element_atoms)
+
+    @pytest.mark.parametrize("model", ["SMD", "ddCOSMO"])
+    def test_refuses_other_solvent_models(self, model: str) -> None:
+        with pytest.raises(ValueError, match="analytical PCM"):
+            single_point_with_descriptors(FORMATE, -1, "hf", "sto-3g", model, "water")
