@@ -157,12 +157,14 @@ the descriptors yet (below).
 The reference data are MNSol's absolute solvation free energies in water,
 water-saturated 1-octanol and n-hexadecane; `scripts/select_mnsol_set.py` picks
 the solutes and `tautomator/mnsol.py` turns the database's geometries into
-SMILES. Octanol–water
-transfer free energies of solutes with no absolute value in either solvent are
-held out as a logP test.
+SMILES. Octanol–water transfer free energies of solutes with no absolute value
+in either solvent are held out as a logP test.
 
-Each solute is run once per solvent and once in the gas phase, and
-`ΔG_solv = G_soln − G_gas` is taken between the two ensembles. Within the
+Each solute is run once per solvent and once in the gas phase
+(`scripts/run_mnsol_set.py`), and `ΔG_solv = G_soln − G_gas` is taken between
+the two ensembles. Every run holds the solute to the one species MNSol
+measured (`[sampling] fixed_species`), and the gas-phase run is gas phase
+throughout, sampling and RRHO included. Within the
 conformer and RRHO model that is exact. A single ensemble with PCM single points
 is not: gas-phase conformers miss the relaxation in solvent (ΔG too positive),
 solution-phase conformers miss the relaxation in the gas phase (ΔG too

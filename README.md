@@ -361,6 +361,9 @@ Scripts (`scripts/`):
   water-saturated 1-octanol and n-hexadecane, for fitting the nonelectrostatic
   correction. Neither MNSol nor its output (`mnsol_set.csv`) is tracked, as
   for the IUPAC data: both are distributed under their own licenses.
+- `run_mnsol_set.py` — runs that set: each solute in every medium its
+  reference values need (water, `woctanol`, hexadecane, gas phase), one fixed
+  species at its own charge, with per-run failure isolation and resume.
 - `approach1_rdkit_first.py`, `approach2_crest_first.py` — sampling-only
   entry points (no DFT).
 
