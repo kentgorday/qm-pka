@@ -12,6 +12,7 @@ from tautomator.config import (
     _has_diffuse,
     alpb_name,
     load_config,
+    solvent_electron_density,
 )
 from tautomator.types import Geometry
 
@@ -971,6 +972,26 @@ class TestExampleConfigs:
             for path in sorted(Path("examples").glob("*.toml")):
                 load_config(path)
         assert "deprecated" not in caplog.text
+
+
+class TestSolventElectronDensity:
+    def test_water_is_the_value_cmirs_rounds_to_005(self) -> None:
+        assert solvent_electron_density("water") == pytest.approx(0.0494, abs=5e-5)
+
+    def test_the_fitted_organic_solvents_are_thinner_than_water(self) -> None:
+        # Electrons per gram barely differ (0.555-0.574); the lower mass density decides.
+        assert solvent_electron_density("octanol") == pytest.approx(0.0417, abs=5e-5)
+        assert solvent_electron_density("Hexadecane") == pytest.approx(0.0394, abs=5e-5)
+
+    def test_water_saturated_octanol_is_one_percent_denser_in_electrons(self) -> None:
+        # 4.9% water by mass and 1.2% denser than dry octanol (J. Chem. Eng. Data 57, 2221).
+        wet, dry = solvent_electron_density("woctanol"), solvent_electron_density("octanol")
+        assert wet == pytest.approx(0.0421, abs=5e-5)
+        assert wet / dry == pytest.approx(1.011, abs=1e-3)
+
+    def test_a_solvent_without_a_liquid_density_raises(self) -> None:
+        with pytest.raises(ValueError, match="No liquid density"):
+            solvent_electron_density("methanol")
 
 
 class TestAlpbName:

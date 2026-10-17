@@ -160,6 +160,14 @@ _SOLVENT_MODELS: dict[str, set[str]] = {
 # xtb knows, or an entry in _ALPB_NAMES.  Octanol and hexadecane carry the values of
 # the Minnesota Solvent Descriptor Database (as SMD uses them), so solvation free
 # energies in them compare with MNSol's.
+#
+# "octanol" is dry 1-octanol and "woctanol" water-saturated 1-octanol, the
+# phase octanol-water partition coefficients are measured in, and so the one
+# logP and most of MNSol's octanol free energies refer to.  Both use dry
+# octanol's dielectric constant: no measured static permittivity of the wet
+# phase was found, and xtb's ALPB "woctanol" uses 9.8629 as well (its fitted
+# parameters are what differ).  Wet octanol differs in its electron density
+# (_SOLVENT_LIQUID); see docs/nonelectrostatic.md.
 SOLVENT_DIELECTRIC: dict[str, float] = {
     "water": 78.39,
     "methanol": 32.7,
@@ -173,6 +181,7 @@ SOLVENT_DIELECTRIC: dict[str, float] = {
     "hexane": 1.88,
     "acetone": 20.7,
     "octanol": 9.8629,
+    "woctanol": 9.8629,
     "hexadecane": 2.0402,
 }
 
@@ -198,6 +207,56 @@ def alpb_name(solvent: str) -> str:
     """The name xtb and CREST know a solvent by, for --alpb."""
     key = solvent.lower()
     return _ALPB_NAMES.get(key, key)
+
+
+# The liquid each solvent is, for the dispersion term of the nonelectrostatic
+# correction, which needs its mean electron density: mass density at 298.15 K
+# and ambient pressure (kg/m^3), and its components as (mass fraction, molar
+# mass in g/mol with IUPAC standard atomic weights, electrons per molecule).
+# Only the solvents the correction is fitted in so far.
+#   water       IAPWS-95 at 0.1 MPa.
+#   octanol     median of the pure-liquid values at 298.15 K in eight studies
+#               in NIST TRC's ThermoML archive (821.5-822.3): DOIs
+#               10.1021/je050200w, 10.1021/je060353z, 10.1021/je100170v,
+#               10.1021/acs.jced.5b00031, 10.1016/j.jct.2008.02.005,
+#               10.1016/j.jct.2013.04.021, 10.1016/j.jct.2013.10.018 and
+#               10.1016/j.jct.2015.06.029.
+#   woctanol    density (831.7 +- 1.7) and water mass fraction (48.91 +- 0.13
+#               mg/g, Karl Fischer) of water-saturated octanol at 298.15 K, from
+#               one study: J. Chem. Eng. Data 57, 2221 (2012), doi:10.1021/je3001427.
+#   hexadecane  Outcalt, Laesecke & Fortin, J. Chem. Thermodyn. 42, 700 (2010),
+#               doi:10.1016/j.jct.2010.01.003 (vibrating tube, 0.04%).
+_WATER = (18.015, 10)
+_OCTANOL = (130.231, 74)
+_SOLVENT_LIQUID: dict[str, tuple[float, tuple[tuple[float, float, int], ...]]] = {
+    "water": (997.047, ((1.0, *_WATER),)),
+    "octanol": (821.85, ((1.0, *_OCTANOL),)),
+    "woctanol": (831.7, ((1.0 - 0.04891, *_OCTANOL), (0.04891, *_WATER))),
+    "hexadecane": (769.8, ((1.0, 226.448, 130),)),
+}
+
+_AVOGADRO = 6.02214076e23
+_BOHR_M = 0.529177210903e-10
+
+
+def solvent_electron_density(solvent: str) -> float:
+    """The solvent's mean electron density as a liquid at 298.15 K, in e / bohr^3.
+
+    Mass density times electrons per mass, every electron counted, summed over
+    the liquid's components.  Water's is 0.0494; CMIRS rounds it to 0.05.
+    """
+    key = solvent.lower()
+    if key not in _SOLVENT_LIQUID:
+        raise ValueError(
+            f"No liquid density for solvent {solvent!r}. "
+            f"Known solvents: {', '.join(sorted(_SOLVENT_LIQUID))}"
+        )
+    density, components = _SOLVENT_LIQUID[key]
+    mol_electrons_per_kg = sum(
+        fraction * electrons / (molar_mass * 1e-3)
+        for fraction, molar_mass, electrons in components
+    )
+    return density * mol_electrons_per_kg * _AVOGADRO * _BOHR_M**3
 
 
 # The solvation single point for an OrbMol refinement: OrbMol has no implicit

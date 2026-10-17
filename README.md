@@ -337,6 +337,10 @@ Source under `tautomator/`. One-liner per module:
 | `conformer_symmetry.py` | Symmetry-aware conformer dedup and multiplicities, from coordinates alone |
 | `ensemble.py` | Boltzmann weighting, energy-window filtering, JSON/SDF I/O |
 | `xyz_io.py` | XYZ read/write, including CREST multi-frame ensembles |
+| `nonelectrostatic.py` | Dispersion, exchange and surface-field integrals of the nonelectrostatic correction (unfitted; see [docs/nonelectrostatic.md](docs/nonelectrostatic.md)) |
+| `cavity_quadrature.py` | Quadrature over the inside and the outside of the PCM cavity, ending on its surface |
+| `pyscf_nonelectrostatic.py` | Reads the correction's inputs off a converged PySCF PCM mean field |
+| `mnsol.py` | MNSol geometries to checked RDKit structures and SMILES |
 
 Scripts (`scripts/`):
 
@@ -345,6 +349,11 @@ Scripts (`scripts/`):
   and resume support.
 - `select_training_set.py` — diversity-based curation from the IUPAC
   Dissociation-Constants dataset.
+- `select_mnsol_set.py` — MNSol solutes and reference free energies in water,
+  water-saturated 1-octanol and n-hexadecane, for fitting the nonelectrostatic
+  correction.
+  Neither MNSol nor its output (`mnsol_set.csv`) is tracked, as for the IUPAC
+  data: both are distributed under their own licenses.
 - `approach1_rdkit_first.py`, `approach2_crest_first.py` — sampling-only
   entry points (no DFT).
 
@@ -531,11 +540,13 @@ by 6, against about 1 for neutrals (Pomogaeva & Chipman's set of 372 solutes).
 The same missing terms decide transfer between solvents: without them every
 logP comes out below zero, n-hexane's included.
 
-The missing part will be a correction in the style of CMIRS: dispersion and
+The missing part is a correction in the style of CMIRS: dispersion and
 exchange integrals, plus a surface integral of the solute's field at the
 cavity. The surface integral stands in for FESR's two field extrema and carries
-the charge-transfer and hydrogen-bond term. It will be fitted on our own
-cavity, because CMIRS's published parameters do not transfer to it.
+the charge-transfer and hydrogen-bond term. The integrals are implemented
+(`nonelectrostatic.py`; see [docs/nonelectrostatic.md](docs/nonelectrostatic.md))
+but not fitted: they will be fitted on our own cavity, because CMIRS's
+published parameters do not transfer to it.
 
 Next, in order:
 
@@ -543,8 +554,9 @@ Next, in order:
    for Psi4, and FastPCM for PySCF, whose stock PCM tripled the cost of an SCF.
    Solvated minimization works on Psi4 and stays cheap on PySCF while the
    surface integrals fit in memory (see the PySCF driver above).
-2. **Run MNSol solutes** (≤10 heavy atoms, ≤2 rotatable bonds; 418 solutes,
-   103 of them ions) in water, 1-octanol and hexadecane.
+2. **Run MNSol solutes** (≤10 heavy atoms, ≤2 rotatable bonds; 417 solutes,
+   103 of them ions; `scripts/select_mnsol_set.py`) in water, water-saturated
+   1-octanol (`woctanol`) and hexadecane, and in the gas phase.
 3. **Fit the non-electrostatic correction** on that set.
 4. **Rerun the pKa training and evaluation set** with IEF-PCM plus the
    correction, and see whether any pKa-specific fitting is still needed.
@@ -564,6 +576,8 @@ What's implemented:
   detection, enantiomer multiplicity.
 - Batch runner with per-molecule failure isolation and resume.
 - Training-set selection from IUPAC dissociation constants.
+- The nonelectrostatic correction's integrals (unfitted, energy only, PySCF
+  only) and the MNSol fitting-set selection.
 
 What's not yet here:
 
