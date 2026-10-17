@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from tautomator.config import alpb_name
 from tautomator.types import Conformer, Geometry
 from tautomator.xtb_runner import single_point
 from tautomator.xyz_io import read_multi_xyz, write_xyz
@@ -216,7 +217,7 @@ def _build_crest_cmd(
         str(charge),
     ]
     if solvent is not None:
-        cmd.extend(["--alpb", solvent])
+        cmd.extend(["--alpb", alpb_name(solvent)])
     if threads is not None:
         cmd.extend(["-T", str(threads)])
 

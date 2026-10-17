@@ -3,9 +3,17 @@ import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from tautomator.config import _has_diffuse, load_config
+from tautomator import xtb_runner
+from tautomator.config import (
+    SOLVENT_DIELECTRIC,
+    _has_diffuse,
+    alpb_name,
+    load_config,
+)
+from tautomator.types import Geometry
 
 
 @pytest.fixture()
@@ -963,3 +971,22 @@ class TestExampleConfigs:
             for path in sorted(Path("examples").glob("*.toml")):
                 load_config(path)
         assert "deprecated" not in caplog.text
+
+
+class TestAlpbName:
+    def test_names_xtb_spells_differently_are_translated(self) -> None:
+        assert alpb_name("Dichloromethane") == "ch2cl2"
+
+    def test_other_names_pass_through(self) -> None:
+        assert alpb_name("Water") == "water"
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize("solvent", sorted(SOLVENT_DIELECTRIC))
+    def test_xtb_knows_every_solvent_pcm_does(self, solvent: str) -> None:
+        """Sampling and RRHO run in xtb's ALPB with the same solvent name the PCM
+        takes its dielectric from; xtb stops on a name it has no parameters for."""
+        water = Geometry(
+            symbols=("O", "H", "H"),
+            coords=np.array([[0.0, 0.0, 0.117], [0.0, 0.757, -0.469], [0.0, -0.757, -0.469]]),
+        )
+        assert xtb_runner.single_point(water, solvent=solvent) < 0

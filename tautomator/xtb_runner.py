@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from tautomator.config import alpb_name
 from tautomator.types import Geometry
 from tautomator.xyz_io import read_multi_xyz, write_xyz
 
@@ -74,7 +75,7 @@ def optimize(
             str(charge),
         ]
         if solvent is not None:
-            cmd.extend(["--alpb", solvent])
+            cmd.extend(["--alpb", alpb_name(solvent)])
 
         result = subprocess.run(
             cmd,
@@ -138,7 +139,7 @@ def single_point(
             str(charge),
         ]
         if solvent is not None:
-            cmd.extend(["--alpb", solvent])
+            cmd.extend(["--alpb", alpb_name(solvent)])
 
         result = subprocess.run(
             cmd,
@@ -208,7 +209,7 @@ def frequencies(
             str(charge),
         ]
         if solvent is not None:
-            cmd.extend(["--alpb", solvent])
+            cmd.extend(["--alpb", alpb_name(solvent)])
         if threads is not None:
             cmd.extend(["--parallel", str(threads)])
 

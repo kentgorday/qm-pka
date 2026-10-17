@@ -155,7 +155,11 @@ _SOLVENT_MODELS: dict[str, set[str]] = {
 }
 
 # Dielectric constants for the PCM models, by lower-case solvent name; both
-# drivers take them from here.
+# drivers take them from here.  The name also goes to xtb's and CREST's --alpb
+# in sampling and RRHO, through `alpb_name`: a solvent added here needs a name
+# xtb knows, or an entry in _ALPB_NAMES.  Octanol and hexadecane carry the values of
+# the Minnesota Solvent Descriptor Database (as SMD uses them), so solvation free
+# energies in them compare with MNSol's.
 SOLVENT_DIELECTRIC: dict[str, float] = {
     "water": 78.39,
     "methanol": 32.7,
@@ -168,6 +172,8 @@ SOLVENT_DIELECTRIC: dict[str, float] = {
     "dichloromethane": 8.93,
     "hexane": 1.88,
     "acetone": 20.7,
+    "octanol": 9.8629,
+    "hexadecane": 2.0402,
 }
 
 
@@ -180,6 +186,18 @@ def solvent_dielectric(solvent: str) -> float:
             f"Known solvents: {', '.join(sorted(SOLVENT_DIELECTRIC))}"
         )
     return SOLVENT_DIELECTRIC[key]
+
+
+# xtb's ALPB parameter sets, by the names above where xtb's differ.  xtb stops
+# on a name it has no parameters for ("solvent: 'dichloromethane' is not
+# parametrized").
+_ALPB_NAMES: dict[str, str] = {"dichloromethane": "ch2cl2"}
+
+
+def alpb_name(solvent: str) -> str:
+    """The name xtb and CREST know a solvent by, for --alpb."""
+    key = solvent.lower()
+    return _ALPB_NAMES.get(key, key)
 
 
 # The solvation single point for an OrbMol refinement: OrbMol has no implicit
